@@ -39,6 +39,7 @@ import {
 const badgeColors = ['#fbbf24', '#f97316', '#8b5cf6', '#10b981', '#60a5fa'];
 
 function App() {
+  const navigate = useNavigate();
   const [darkMode, setDarkMode] = useState(() => {
     const savedTheme = localStorage.getItem('quiz-theme');
     return savedTheme ? savedTheme === 'dark' : true;
@@ -179,7 +180,7 @@ function App() {
     setAnswers({});
     setSubmitted(false);
     setActiveQuestionIndex(0);
-    window.location.assign('/quiz');
+    navigate('/quiz');
   };
 
   const handleSubmitQuiz = () => {
@@ -212,7 +213,7 @@ function App() {
     setUser(mockUser);
     setAuthSuccess('Login successful. Redirecting to dashboard...');
     setTimeout(() => {
-      window.location.href = '/dashboard';
+      navigate('/dashboard');
     }, 500);
   };
 
@@ -246,13 +247,13 @@ function App() {
     setUser(mockUser);
     setAuthSuccess('Account created successfully. You are now logged in.');
     setTimeout(() => {
-      window.location.href = '/dashboard';
+      navigate('/dashboard');
     }, 500);
   };
 
   const handleLogout = () => {
     setUser(null);
-    window.location.href = '/';
+    navigate('/');
   };
 
   const handleChatSubmit = async (event) => {
@@ -274,7 +275,8 @@ function App() {
     setMessages((prev) => [...prev, { id: tempId, sender: 'bot', text: 'Thinking...' }]);
 
     try {
-      const response = await fetch('http://localhost:5000/api/chat', {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+      const response = await fetch(`${apiUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: trimmed }),
@@ -350,14 +352,14 @@ function App() {
               className="primary-btn large-btn"
               onClick={() => {
                 setSelectedCategory('Computer Science');
-                window.location.assign('/quizzes');
+                navigate('/quizzes');
               }}
             >
               Start Quiz <ArrowRight size={18} />
             </button>
             <button
               className="secondary-btn large-btn"
-              onClick={() => window.location.assign('/categories')}
+              onClick={() => navigate('/categories')}
             >
               Explore Categories
             </button>
@@ -401,7 +403,7 @@ function App() {
               className="primary-btn small-btn"
               onClick={() => {
                 setSelectedCategory(category.name);
-                window.location.assign('/quizzes');
+                navigate('/quizzes');
               }}
             >
               Start Quiz
@@ -674,7 +676,7 @@ function App() {
               className="primary-btn small-btn"
               onClick={() => {
                 setSelectedCategory(category.name);
-                window.location.assign('/quizzes');
+                navigate('/quizzes');
               }}
             >
               Start Quiz
@@ -836,15 +838,15 @@ function App() {
           </div>
           <p className="result-status">Performance: <span>Excellent!</span></p>
           <div className="result-actions">
-            <button className="primary-btn" onClick={() => window.location.assign('/analytics')}>Review Answers</button>
+            <button className="primary-btn" onClick={() => navigate('/analytics')}>Review Answers</button>
             <button className="secondary-btn" onClick={() => {
               setAnswers({});
               setSubmitted(false);
               setActiveQuestionIndex(0);
               setTimeLeft(currentQuiz.timeLimit * 60);
-              window.location.assign('/quizzes');
+              navigate('/quizzes');
             }}>Try Again</button>
-            <button className="secondary-btn" onClick={() => window.location.assign('/dashboard')}>Back to Dashboard</button>
+            <button className="secondary-btn" onClick={() => navigate('/dashboard')}>Back to Dashboard</button>
             <button className="secondary-btn">Share Result</button>
           </div>
         </div>
@@ -1058,7 +1060,7 @@ function App() {
   );
 
   return (
-    <BrowserRouter>
+    <>
       <div className="app-shell">
         <Navbar darkMode={darkMode} toggleTheme={toggleTheme} user={user} onLogout={handleLogout} />
         <main>
@@ -1123,7 +1125,7 @@ function App() {
           </div>
         )}
       </div>
-    </BrowserRouter>
+    </>
   );
 }
 
