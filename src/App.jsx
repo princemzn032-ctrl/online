@@ -26,6 +26,7 @@ import {
 } from 'recharts';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
+import { getQuizzes, login, register, submitResult } from './api';
 import {
   categories,
   sampleQuizzes,
@@ -62,6 +63,8 @@ function App() {
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
   const [quizLoading, setQuizLoading] = useState(false);
+  const [quizzes, setQuizzes] = useState(sampleQuizzes);
+  const [quizError, setQuizError] = useState('');
   const [adminQuestionForm, setAdminQuestionForm] = useState({
     question: '',
     optionA: '',
@@ -98,6 +101,23 @@ function App() {
       localStorage.removeItem('quiz-user');
     }
   }, [user]);
+
+  useEffect(() => {
+    let mounted = true;
+    getQuizzes()
+      .then((data) => {
+        if (mounted && data.length) {
+          setQuizzes(data.map((quiz) => ({ ...quiz, id: quiz._id || quiz.id })));
+        }
+      })
+      .catch((error) => {
+        if (mounted) setQuizError(`Using demo quizzes: ${error.message}`);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (submitted) return;
@@ -174,7 +194,7 @@ function App() {
   };
 
   const handleStartQuiz = (quiz) => {
-    setQuizLoading(true);
+    setQuizLoading(false);
     setCurrentQuiz(quiz);
     setTimeLeft(quiz.timeLimit * 60);
     setAnswers({});
@@ -185,9 +205,18 @@ function App() {
 
   const handleSubmitQuiz = () => {
     setSubmitted(true);
+    if (user && currentQuiz._id) {
+      submitResult({
+        quizId: currentQuiz._id,
+        score,
+        percentage: Math.round((score / currentQuiz.questions.length) * 100),
+        correctAnswers: score,
+        wrongAnswers: currentQuiz.questions.length - score,
+      }).catch((error) => console.error('Result save failed:', error));
+    }
   };
 
-  const handleLoginSubmit = (event) => {
+  const handleLoginSubmit = async (event) => {
     event.preventDefault();
     setAuthError('');
     setAuthSuccess('');
@@ -203,21 +232,18 @@ function App() {
       return;
     }
 
-    const mockUser = {
-      id: 'user-1',
-      name: 'Ava Johnson',
-      email: normalizedEmail,
-      role: 'user',
-    };
-
-    setUser(mockUser);
-    setAuthSuccess('Login successful. Redirecting to dashboard...');
-    setTimeout(() => {
-      navigate('/dashboard');
-    }, 500);
+    try {
+      const data = await login({ email: normalizedEmail, password: loginForm.password });
+      localStorage.setItem('quiz-token', data.token);
+      setUser(data.user);
+      setAuthSuccess('Login successful. Redirecting to dashboard...');
+      setTimeout(() => navigate('/dashboard'), 500);
+    } catch (error) {
+      setAuthError(error.message);
+    }
   };
 
-  const handleRegisterSubmit = (event) => {
+  const handleRegisterSubmit = async (event) => {
     event.preventDefault();
     setAuthError('');
     setAuthSuccess('');
@@ -237,22 +263,24 @@ function App() {
       return;
     }
 
-    const mockUser = {
-      id: 'new-user',
-      name: registerForm.name.trim(),
-      email: registerForm.email.trim(),
-      role: 'user',
-    };
-
-    setUser(mockUser);
-    setAuthSuccess('Account created successfully. You are now logged in.');
-    setTimeout(() => {
-      navigate('/dashboard');
-    }, 500);
+    try {
+      const data = await register({
+        name: registerForm.name.trim(),
+        email: registerForm.email.trim(),
+        password: registerForm.password,
+      });
+      localStorage.setItem('quiz-token', data.token);
+      setUser(data.user);
+      setAuthSuccess('Account created successfully. You are now logged in.');
+      setTimeout(() => navigate('/dashboard'), 500);
+    } catch (error) {
+      setAuthError(error.message);
+    }
   };
 
   const handleLogout = () => {
     setUser(null);
+    localStorage.removeItem('quiz-token');
     navigate('/');
   };
 
@@ -306,9 +334,9 @@ function App() {
   };
 
   const filteredQuizzes = useMemo(() => {
-    if (!selectedCategory || selectedCategory === 'All') return sampleQuizzes;
-    return sampleQuizzes.filter((quiz) => quiz.category === selectedCategory);
-  }, [selectedCategory]);
+    if (!selectedCategory || selectedCategory === 'All') return quizzes;
+    return quizzes.filter((quiz) => quiz.category === selectedCategory);
+  }, [selectedCategory, quizzes]);
 
   const toggleTheme = () => setDarkMode((prev) => !prev);
 
@@ -693,6 +721,7 @@ function App() {
         <span className="eyebrow">Category</span>
         <h2>{selectedCategory}</h2>
       </div>
+      {quizError ? <div className="form-message error">{quizError}</div> : null}
       <div className="quiz-list-panel">
         {filteredQuizzes.length === 0 ? (
           <div className="panel-box empty-state">

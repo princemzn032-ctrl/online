@@ -1,16 +1,25 @@
-# React + Vite
+# QuizMaster
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+QuizMaster is a React/Vite quiz application with an Express, MongoDB, and JWT backend.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Start MongoDB locally, or provide a MongoDB connection string.
+2. Copy `server/.env.example` to `server/.env` and set `MONGO_URI` and `JWT_SECRET`.
+3. Install and seed the backend:
 
-## React Compiler
+   ```bash
+   cd server
+   npm install
+   npm run seed
+   npm run dev
+   ```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+4. In another terminal, install and start the frontend:
 
-## Expanding the Oxlint configuration
+   ```bash
+   npm install
+   npm run dev
+   ```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+The frontend uses `http://localhost:5000` by default. Set `VITE_API_URL` in a root `.env` file when the API runs elsewhere. Registration, login, quiz loading, and authenticated result saving use the backend API. The UI falls back to bundled demo quizzes if the API is unavailable.
