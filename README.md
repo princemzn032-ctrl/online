@@ -29,6 +29,21 @@ QuizMaster is a React/Vite quiz application with an Express API and a persistent
 
 The root `.env.example` selects `VITE_BACKEND_MODE=local`, which uses the Express/MongoDB backend. To connect the quiz, login, score, and leaderboard data to Supabase instead, set `VITE_BACKEND_MODE=supabase`, configure `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the root `.env`, and run [`supabase/schema.sql`](./supabase/schema.sql) in the Supabase SQL Editor. That schema keeps only the General Knowledge category and its 20-question quiz; it deletes other quiz/category data and non-General-Knowledge attempts, but keeps user profiles and General Knowledge attempts. Restart Vite after changing `.env`.
 
+## Deploy to Vercel
+
+The [`vercel.json`](./vercel.json) configuration builds the Vite frontend as a static site and routes `/api/*` requests to the Express API serverless function. Before deploying:
+
+1. Import this GitHub repository (`princemzn032-ctrl/online`) into Vercel and keep the project root set to the repository root.
+2. In the Vercel project's **Settings > Environment Variables**, add:
+   - `MONGO_URI`: the MongoDB Atlas connection string, with a network access rule that allows your Vercel deployment to connect. Atlas network access must permit the Vercel runtime; do not use a local MongoDB address.
+   - `JWT_SECRET`: a unique random secret of at least 32 characters.
+   - `FRONTEND_URL` (optional): the exact `https://` origin if using a custom domain.
+3. Apply the variables to Production (and Preview if needed), then redeploy.
+4. After the first deployment, seed the General Knowledge quiz once using a trusted local environment configured with the same Atlas database URI: `npm --prefix server run seed`. The seed removes other quizzes/categories and non-General-Knowledge attempts.
+5. Check `https://<your-vercel-domain>/api/health`; it should report `"status":"ok"` and `"database":"connected"`.
+
+The MongoDB connection must be network-accessible from Vercel. Do not put database credentials or JWT secrets in the repository or in `vercel.json`.
+
 ## Deploy to Render
 
 The [`render.yaml`](./render.yaml) Blueprint builds and serves the frontend and API as one web service. Before deploying:

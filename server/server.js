@@ -27,6 +27,8 @@ app.use(cors({
       !origin
       || origin === process.env.FRONTEND_URL
       || origin === process.env.RENDER_EXTERNAL_URL
+      || origin === `https://${process.env.VERCEL_URL}`
+      || origin === `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
       || isLocalFrontend
     ) {
       return callback(null, true);
@@ -55,16 +57,18 @@ app.use('/api/results', resultRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/platform', platformRoutes);
 
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
   app.use(express.static(path.join(__dirname, '../dist')));
   app.get('*', (req, res) => {
     res.sendFile(path.resolve(__dirname, '../dist', 'index.html'));
   });
-} else {
+} else if (!process.env.VERCEL) {
   app.get('/', (req, res) => {
     res.json({ message: 'QuizMaster API is running' });
   });
 }
+
+export default app;
 
 const PORT = process.env.PORT || 5000;
 
@@ -79,7 +83,9 @@ const startServer = async () => {
   });
 };
 
-startServer().catch((error) => {
-  console.error(`Server startup failed: ${error.message}`);
-  process.exitCode = 1;
-});
+if (!process.env.VERCEL) {
+  startServer().catch((error) => {
+    console.error(`Server startup failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
