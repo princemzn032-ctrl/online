@@ -19,8 +19,17 @@ router.get('/dashboard', async (req, res) => {
 });
 
 router.get('/users', async (req, res) => {
-  const users = await User.find().select('-password');
-  res.json(users);
+  try {
+    const users = await User.find()
+      .select('name email role createdAt lastLoginAt')
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean();
+    return res.json(users);
+  } catch (error) {
+    console.error('Admin user list failed:', error.message);
+    return res.status(500).json({ message: 'Unable to fetch registered users.' });
+  }
 });
 
 router.post('/categories', async (req, res) => {

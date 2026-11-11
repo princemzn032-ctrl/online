@@ -1,13 +1,12 @@
 import './App.css';
-import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useState } from 'react';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   Bot,
   CheckCircle2,
   MessageCircle,
   Send,
-  Sparkles,
   X,
 } from 'lucide-react';
 import {
@@ -26,35 +25,66 @@ import {
 } from 'recharts';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
-import { getQuizzes, login, register, submitResult } from './api';
+import PatientIntake from './components/PatientIntake';
+import { getAdminUsers, sendChatMessage } from './api';
+import { getAssistantReply } from '../shared/assistant';
+import { RequireAuth } from './auth/AuthContext.jsx';
+import { useAuth } from './auth/useAuth';
+import { isLocalBackend } from './lib/appMode';
 import {
-  categories,
-  sampleQuizzes,
-  leaderboardData,
-  recentActivity,
-  adminUsers,
-  userProfile,
-  analyticsData,
-} from './data';
+  fetchCategories,
+  fetchLeaderboard,
+  fetchPlatformStats,
+  fetchQuizzes,
+  fetchUserAttempts,
+  saveAttempt,
+} from './lib/quizData';
 
 const badgeColors = ['#fbbf24', '#f97316', '#8b5cf6', '#10b981', '#60a5fa'];
 
+function getAuthErrorMessage(error, fallback) {
+  const message = error?.message || '';
+  if (/failed to fetch|networkerror|fetch failed|name_not_resolved/i.test(message)) {
+    return 'Cannot connect to Supabase. Check that VITE_SUPABASE_URL points to an active project and that your internet connection is available.';
+  }
+  return message || fallback;
+}
+
 function App() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const {
+    user: authUser,
+    profile,
+    profileLoading,
+    profileError,
+    configurationError,
+    signIn,
+    signUp,
+    signInWithGoogle,
+    signOut,
+    refreshProfile,
+  } = useAuth();
+  const user = authUser ? {
+    id: authUser.id,
+    name: profile?.username || authUser.user_metadata?.username || authUser.email?.split('@')[0] || 'Learner',
+    email: authUser.email,
+    avatar_url: profile?.avatar_url,
+    role: authUser.user_metadata?.role,
+  } : null;
   const [darkMode, setDarkMode] = useState(() => {
     const savedTheme = localStorage.getItem('quiz-theme');
     return savedTheme ? savedTheme === 'dark' : true;
   });
-  const [selectedCategory, setSelectedCategory] = useState('Computer Science');
-  const [currentQuiz, setCurrentQuiz] = useState(sampleQuizzes[0]);
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [lastStartedQuizId, setLastStartedQuizId] = useState(() => sessionStorage.getItem('quiz-last-started') || '');
+  const [currentQuiz, setCurrentQuiz] = useState({ id: '', title: '', category: '', timeLimit: 0, questions: [] });
   const [answers, setAnswers] = useState({});
   const [submitted, setSubmitted] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(sampleQuizzes[0].timeLimit * 60);
+  const [resultScore, setResultScore] = useState(null);
+  const [timeLeft, setTimeLeft] = useState(0);
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
-  const [user, setUser] = useState(() => {
-    const savedUser = localStorage.getItem('quiz-user');
-    return savedUser ? JSON.parse(savedUser) : null;
-  });
   const [authMode, setAuthMode] = useState('login');
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [registerForm, setRegisterForm] = useState({ name: '', email: '', password: '', confirmPassword: '' });
@@ -62,9 +92,31 @@ function App() {
   const [authSuccess, setAuthSuccess] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
-  const [quizLoading, setQuizLoading] = useState(false);
-  const [quizzes, setQuizzes] = useState(sampleQuizzes);
+  const [quizLoading, setQuizLoading] = useState(true);
+  const [quizzes, setQuizzes] = useState([]);
   const [quizError, setQuizError] = useState('');
+  const [categories, setCategories] = useState([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [categoriesError, setCategoriesError] = useState('');
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+  const [leaderboardError, setLeaderboardError] = useState('');
+  const [platformStats, setPlatformStats] = useState(null);
+  const [statsError, setStatsError] = useState('');
+  const [attemptsState, setAttemptsState] = useState({ userId: null, items: [] });
+  const [attemptsLoadedFor, setAttemptsLoadedFor] = useState(null);
+  const [attemptsErrorState, setAttemptsErrorState] = useState({ userId: null, message: '' });
+  const userAttempts = attemptsState.userId === user?.id ? attemptsState.items : [];
+  const attemptsLoading = Boolean(user?.id && attemptsLoadedFor !== user.id);
+  const attemptsError = attemptsErrorState.userId === user?.id ? attemptsErrorState.message : '';
+  const [attemptSaveError, setAttemptSaveError] = useState('');
+  const [attemptSaving, setAttemptSaving] = useState(false);
+  const [attemptSaved, setAttemptSaved] = useState(false);
+  const attemptSavingRef = useRef(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [managedUsers, setManagedUsers] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(true);
+  const [adminLoadError, setAdminLoadError] = useState('');
   const [adminQuestionForm, setAdminQuestionForm] = useState({
     question: '',
     optionA: '',
@@ -74,8 +126,9 @@ function App() {
     correctAnswer: '',
   });
   const [adminQuestionMessage, setAdminQuestionMessage] = useState('');
-  const [chatOpen, setChatOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
+  const [chatPending, setChatPending] = useState(false);
   const [messages, setMessages] = useState([
     {
       id: 1,
@@ -95,24 +148,24 @@ function App() {
   }, [darkMode]);
 
   useEffect(() => {
-    if (user) {
-      localStorage.setItem('quiz-user', JSON.stringify(user));
-    } else {
-      localStorage.removeItem('quiz-user');
+    if (authUser && location.pathname === '/auth') {
+      navigate(location.state?.from?.pathname || '/dashboard', { replace: true });
     }
-  }, [user]);
+  }, [authUser, location.pathname, location.state, navigate]);
 
   useEffect(() => {
     let mounted = true;
-    getQuizzes()
-      .then((data) => {
-        if (mounted && data.length) {
-          setQuizzes(data.map((quiz) => ({ ...quiz, id: quiz._id || quiz.id })));
-        }
-      })
-      .catch((error) => {
-        if (mounted) setQuizError(`Using demo quizzes: ${error.message}`);
-      });
+    fetchCategories()
+      .then((items) => { if (mounted) setCategories(items); })
+      .catch((error) => { if (mounted) setCategoriesError(error.message || 'Unable to load categories.'); })
+      .finally(() => { if (mounted) setCategoriesLoading(false); });
+    fetchQuizzes()
+      .then((items) => { if (mounted) setQuizzes(items); })
+      .catch((error) => { if (mounted) setQuizError(error.message || 'Unable to load quizzes.'); })
+      .finally(() => { if (mounted) setQuizLoading(false); });
+    fetchPlatformStats()
+      .then((stats) => { if (mounted) setPlatformStats(stats); })
+      .catch((error) => { if (mounted) setStatsError(error.message || 'Unable to load platform statistics.'); });
 
     return () => {
       mounted = false;
@@ -120,12 +173,55 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (submitted) return;
+    let mounted = true;
+    fetchLeaderboard()
+      .then((items) => { if (mounted) setLeaderboard(items); })
+      .catch((error) => { if (mounted) setLeaderboardError(error.message || 'Unable to load the leaderboard.'); })
+      .finally(() => { if (mounted) setLeaderboardLoading(false); });
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    let mounted = true;
+    fetchUserAttempts(user.id)
+      .then((items) => { if (mounted) setAttemptsState({ userId: user.id, items }); })
+      .catch((error) => {
+        if (mounted) setAttemptsErrorState({ userId: user.id, message: error.message || 'Unable to load your quiz history.' });
+      })
+      .finally(() => { if (mounted) setAttemptsLoadedFor(user.id); });
+    return () => { mounted = false; };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (user?.role !== 'admin') {
+      return undefined;
+    }
+
+    let mounted = true;
+    getAdminUsers()
+      .then((users) => {
+        if (mounted) setManagedUsers(users);
+      })
+      .catch((error) => {
+        if (mounted) setAdminLoadError(error.message);
+      })
+      .finally(() => {
+        if (mounted) setAdminLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [user?.role]);
+
+  useEffect(() => {
+    if (submitted || !currentQuiz.id) return undefined;
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          handleSubmitQuiz();
+          setSubmitted(true);
           return 0;
         }
         return prev - 1;
@@ -137,15 +233,34 @@ function App() {
 
   const totalQuestions = currentQuiz.questions?.length || 0;
   const question = currentQuiz.questions?.[activeQuestionIndex];
+  const attemptsTotalQuestions = userAttempts.reduce((total, attempt) => total + attempt.total_questions, 0);
+  const attemptsTotalCorrect = userAttempts.reduce((total, attempt) => total + attempt.score, 0);
+  const averageAttemptScore = attemptsTotalQuestions
+    ? Math.round((attemptsTotalCorrect / attemptsTotalQuestions) * 100)
+    : 0;
+  const bestAttemptScore = userAttempts.reduce((best, attempt) => (
+    Math.max(best, attempt.total_questions ? Math.round((attempt.score / attempt.total_questions) * 100) : 0)
+  ), 0);
+  const userRank = leaderboard.find((entry) => entry.user_id === user?.id)?.rank;
+  const analyticsLineData = [...userAttempts].reverse().map((attempt, index) => ({
+    name: `${index + 1}`,
+    score: attempt.total_questions ? Math.round((attempt.score / attempt.total_questions) * 100) : 0,
+  }));
+  const analyticsCategoryMap = userAttempts.reduce((summary, attempt) => {
+    const name = attempt.quizzes?.categories?.name || 'Other';
+    const category = summary[name] || { name, correct: 0, incorrect: 0 };
+    category.correct += attempt.score;
+    category.incorrect += attempt.total_questions - attempt.score;
+    summary[name] = category;
+    return summary;
+  }, {});
+  const analyticsBarData = Object.values(analyticsCategoryMap);
+  const analyticsPieData = [
+    { name: 'Correct', value: attemptsTotalCorrect },
+    { name: 'Incorrect', value: Math.max(0, attemptsTotalQuestions - attemptsTotalCorrect) },
+  ];
 
-  const score = useMemo(() => {
-    if (!currentQuiz.questions) return 0;
-    return currentQuiz.questions.reduce((total, item) => {
-      const selected = answers[item.id];
-      if (selected === item.correctAnswer) return total + 1;
-      return total;
-    }, 0);
-  }, [answers, currentQuiz.questions]);
+  const score = resultScore ?? 0;
 
   const handleAddQuestion = (event) => {
     event.preventDefault();
@@ -195,51 +310,94 @@ function App() {
 
   const handleStartQuiz = (quiz) => {
     setQuizLoading(false);
+    const quizId = String(quiz.id || quiz._id);
+    sessionStorage.setItem('quiz-last-started', quizId);
+    setLastStartedQuizId(quizId);
     setCurrentQuiz(quiz);
     setTimeLeft(quiz.timeLimit * 60);
     setAnswers({});
     setSubmitted(false);
+    setResultScore(null);
+    setAttemptSaveError('');
+    setAttemptSaved(false);
+    attemptSavingRef.current = false;
     setActiveQuestionIndex(0);
     navigate('/quiz');
   };
 
   const handleSubmitQuiz = () => {
+    if (submitted) return;
     setSubmitted(true);
-    if (user && currentQuiz._id) {
-      submitResult({
-        quizId: currentQuiz._id,
-        score,
-        percentage: Math.round((score / currentQuiz.questions.length) * 100),
-        correctAnswers: score,
-        wrongAnswers: currentQuiz.questions.length - score,
-      }).catch((error) => console.error('Result save failed:', error));
-    }
   };
+
+  useEffect(() => {
+    if (!submitted || !user?.id || !currentQuiz.id || attemptSavingRef.current) return;
+    attemptSavingRef.current = true;
+    setAttemptSaving(true);
+    saveAttempt({
+      quizId: currentQuiz.id,
+      answers,
+      timeTaken: Math.max(0, (currentQuiz.timeLimit * 60) - timeLeft),
+    })
+      .then(async (result) => {
+        setResultScore(result.score);
+        setAttemptSaved(true);
+        try {
+          setAttemptsState({ userId: user.id, items: await fetchUserAttempts(user.id) });
+        } catch (error) {
+          setAttemptsErrorState({ userId: user.id, message: error.message || 'Unable to refresh your quiz history.' });
+        }
+        try {
+          await refreshProfile();
+        } catch (error) {
+          setAttemptSaveError(`Your result was saved, but your profile could not be refreshed: ${error.message}`);
+        }
+        try {
+          setLeaderboard(await fetchLeaderboard());
+        } catch (error) {
+          setLeaderboardError(error.message || 'Unable to refresh the leaderboard.');
+        }
+        try {
+          setPlatformStats(await fetchPlatformStats());
+        } catch (error) {
+          setStatsError(error.message || 'Unable to refresh platform statistics.');
+        }
+      })
+      .catch((error) => {
+        setAttemptSaveError(`Quiz completed, but the result could not be saved: ${error.message}`);
+      })
+      .finally(() => {
+        setAttemptSaving(false);
+      });
+  }, [answers, currentQuiz, refreshProfile, submitted, timeLeft, user?.id]);
 
   const handleLoginSubmit = async (event) => {
     event.preventDefault();
     setAuthError('');
     setAuthSuccess('');
+    setAuthLoading(true);
 
-    if (!loginForm.email || !loginForm.password) {
+    const credentials = { email: loginForm.email.trim(), password: loginForm.password };
+    if (!credentials.email || !credentials.password) {
       setAuthError('Email and password are required.');
+      setAuthLoading(false);
       return;
     }
 
-    const normalizedEmail = loginForm.email.trim();
-    if (!normalizedEmail.includes('@')) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(credentials.email)) {
       setAuthError('Please enter a valid email address.');
+      setAuthLoading(false);
       return;
     }
 
     try {
-      const data = await login({ email: normalizedEmail, password: loginForm.password });
-      localStorage.setItem('quiz-token', data.token);
-      setUser(data.user);
-      setAuthSuccess('Login successful. Redirecting to dashboard...');
-      setTimeout(() => navigate('/dashboard'), 500);
+      await signIn(credentials.email, credentials.password);
+      setAuthSuccess('Login successful. Redirecting...');
+      navigate(location.state?.from?.pathname || '/dashboard', { replace: true });
     } catch (error) {
-      setAuthError(error.message);
+      setAuthError(getAuthErrorMessage(error, 'Unable to log in. Please try again.'));
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -247,41 +405,74 @@ function App() {
     event.preventDefault();
     setAuthError('');
     setAuthSuccess('');
+    setAuthLoading(true);
 
-    if (!registerForm.name || !registerForm.email || !registerForm.password || !registerForm.confirmPassword) {
+    const details = {
+      username: registerForm.name.trim(),
+      email: registerForm.email.trim(),
+      password: registerForm.password,
+    };
+    if (!details.username || !details.email || !details.password || !registerForm.confirmPassword) {
       setAuthError('Please fill in all fields.');
+      setAuthLoading(false);
       return;
     }
 
-    if (registerForm.password.length < 6) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(details.email)) {
+      setAuthError('Please enter a valid email address.');
+      setAuthLoading(false);
+      return;
+    }
+
+    if (details.password.length < 6) {
       setAuthError('Password must be at least 6 characters long.');
+      setAuthLoading(false);
       return;
     }
 
-    if (registerForm.password !== registerForm.confirmPassword) {
+    if (details.password !== registerForm.confirmPassword) {
       setAuthError('Passwords do not match.');
+      setAuthLoading(false);
       return;
     }
 
     try {
-      const data = await register({
-        name: registerForm.name.trim(),
-        email: registerForm.email.trim(),
-        password: registerForm.password,
-      });
-      localStorage.setItem('quiz-token', data.token);
-      setUser(data.user);
-      setAuthSuccess('Account created successfully. You are now logged in.');
-      setTimeout(() => navigate('/dashboard'), 500);
+      const { session } = await signUp(details);
+      if (session) {
+        setAuthSuccess('Account created successfully. Redirecting...');
+        navigate('/dashboard', { replace: true });
+      } else {
+        setAuthSuccess('Account created. Check your email to confirm your address before signing in.');
+      }
     } catch (error) {
-      setAuthError(error.message);
+      setAuthError(getAuthErrorMessage(error, 'Unable to create your account. Please try again.'));
+    } finally {
+      setAuthLoading(false);
     }
   };
 
-  const handleLogout = () => {
-    setUser(null);
-    localStorage.removeItem('quiz-token');
-    navigate('/');
+  const handleGoogleSignIn = async () => {
+    setAuthError('');
+    setAuthSuccess('');
+    setAuthLoading(true);
+    try {
+      await signInWithGoogle(`${window.location.origin}/auth`);
+    } catch (error) {
+      setAuthError(getAuthErrorMessage(error, 'Unable to sign in with Google. Please try again.'));
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut();
+      setManagedUsers([]);
+      setAdminLoadError('');
+      setAdminLoading(true);
+      navigate('/');
+    } catch (error) {
+      setAuthError(error.message || 'Unable to sign out. Please try again.');
+    }
   };
 
   const handleChatSubmit = async (event) => {
@@ -290,7 +481,7 @@ function App() {
     if (!trimmed) return;
 
     const userMessage = {
-      id: Date.now(),
+      id: `${Date.now()}-user`,
       sender: 'user',
       text: trimmed,
     };
@@ -299,27 +490,33 @@ function App() {
     setChatInput('');
 
     // Show a temporary typing indicator message
-    const tempId = Date.now() + 1;
+    const tempId = `${Date.now()}-bot`;
     setMessages((prev) => [...prev, { id: tempId, sender: 'bot', text: 'Thinking...' }]);
+    setChatPending(true);
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-      const response = await fetch(`${apiUrl}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: trimmed }),
-      });
-      
-      const data = await response.json();
-      
-      setMessages((prev) => 
-        prev.map(msg => msg.id === tempId ? { ...msg, text: data.reply || data.error || 'Sorry, I could not generate a response.' } : msg)
-      );
+      let reply;
+      try {
+        const data = await sendChatMessage(trimmed);
+        reply = data.mode === 'guide'
+          ? `The AI service is unavailable, but I can still help: ${data.reply}`
+          : data.reply;
+      } catch {
+        reply = `The AI service is unavailable, but I can still help: ${getAssistantReply(trimmed)}`;
+      }
+
+      setMessages((prev) => prev.map((message) => (
+        message.id === tempId ? { ...message, text: reply || getAssistantReply(trimmed) } : message
+      )));
     } catch (error) {
       console.error('Chat error:', error);
-      setMessages((prev) => 
-        prev.map(msg => msg.id === tempId ? { ...msg, text: 'Error connecting to the chat server.' } : msg)
-      );
+      setMessages((prev) => prev.map((message) => (
+        message.id === tempId
+          ? { ...message, text: 'Sorry, I could not answer just now. Please try again.' }
+          : message
+      )));
+    } finally {
+      setChatPending(false);
     }
   };
 
@@ -334,17 +531,27 @@ function App() {
   };
 
   const filteredQuizzes = useMemo(() => {
-    if (!selectedCategory || selectedCategory === 'All') return quizzes;
-    return quizzes.filter((quiz) => quiz.category === selectedCategory);
-  }, [selectedCategory, quizzes]);
+    const matchesCategory = !selectedCategory || selectedCategory === 'All'
+      ? quizzes
+      : quizzes.filter((quiz) => quiz.category === selectedCategory);
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+    const matchesSearch = normalizedSearch
+      ? matchesCategory.filter((quiz) => (
+        `${quiz.title} ${quiz.description} ${quiz.category}`.toLowerCase().includes(normalizedSearch)
+      ))
+      : matchesCategory;
+    return [...matchesSearch].sort((first, second) => (
+      Number(String(first.id) === lastStartedQuizId) - Number(String(second.id) === lastStartedQuizId)
+    ));
+  }, [lastStartedQuizId, searchTerm, selectedCategory, quizzes]);
 
   const toggleTheme = () => setDarkMode((prev) => !prev);
 
   const stats = [
-    { label: '10K+ Questions', value: '10K+' },
-    { label: '5K+ Students', value: '5K+' },
-    { label: '50+ Categories', value: '50+' },
-    { label: '100K+ Quizzes Attempted', value: '100K+' },
+    { label: 'Questions', value: platformStats?.question_count },
+    { label: 'Students', value: platformStats?.student_count },
+    { label: 'Categories', value: platformStats?.category_count },
+    { label: 'Quizzes Attempted', value: platformStats?.attempt_count },
   ];
 
   const howItWorks = [
@@ -379,7 +586,7 @@ function App() {
             <button
               className="primary-btn large-btn"
               onClick={() => {
-                setSelectedCategory('Computer Science');
+                setSelectedCategory('All');
                 navigate('/quizzes');
               }}
             >
@@ -395,11 +602,12 @@ function App() {
           <div className="mini-stats">
             {stats.map((stat) => (
               <div key={stat.label} className="mini-stat-card">
-                <strong>{stat.value}</strong>
+                <strong>{stat.value == null ? '—' : Number(stat.value).toLocaleString()}</strong>
                 <span>{stat.label}</span>
               </div>
             ))}
           </div>
+          {statsError ? <div className="form-message error">{statsError}</div> : null}
         </div>
 
         <div className="hero-visual hero-visual-clean">
@@ -418,11 +626,13 @@ function App() {
           <h2>Choose your next challenge</h2>
         </div>
         <div className="category-grid">
-          {categories.map((category) => (
+          {categoriesLoading ? <p>Loading categories...</p> : null}
+          {categoriesError ? <div className="form-message error">{categoriesError}</div> : null}
+          {!categoriesLoading && !categoriesError && categories.map((category, index) => (
             <div key={category.id} className="category-card">
-              <div className="category-icon" style={{ background: `${category.color}22`, color: category.color }}>{category.icon}</div>
+              <div className="category-icon" style={{ background: `${badgeColors[index % badgeColors.length]}22`, color: badgeColors[index % badgeColors.length] }}>{category.icon}</div>
               <h3>{category.name}</h3>
-              <p>{category.questions} Questions</p>
+              <p>{category.questionCount} Questions</p>
               <div className="category-meta">
                 <span>{category.difficulty}</span>
                 <strong>{'★'.repeat(4)}</strong>
@@ -481,12 +691,9 @@ function App() {
         <div className="auth-side">
           <span className="eyebrow">{authMode === 'login' ? 'Welcome back' : 'Create account'}</span>
           <h2>{authMode === 'login' ? 'Sign in to continue your learning' : 'Join QuizMaster today'}</h2>
-          <div className="social-auth">
-            <button type="button" className="social-btn wide">Continue with Google</button>
-          </div>
-          <div className="divider"><span>or</span></div>
 
           {authError ? <div className="form-message error">{authError}</div> : null}
+          {configurationError ? <div className="form-message error">{configurationError}</div> : null}
           {authSuccess ? <div className="form-message success">{authSuccess}</div> : null}
 
           {authMode === 'login' ? (
@@ -497,6 +704,7 @@ function App() {
                   type="email"
                   placeholder="you@example.com"
                   value={loginForm.email}
+                  required
                   onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
                 />
               </label>
@@ -507,6 +715,7 @@ function App() {
                     type={showLoginPassword ? 'text' : 'password'}
                     placeholder="••••••••"
                     value={loginForm.password}
+                    required
                     onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
                   />
                   <button type="button" className="toggle-password" onClick={() => setShowLoginPassword((prev) => !prev)}>
@@ -514,11 +723,9 @@ function App() {
                   </button>
                 </div>
               </label>
-              <div className="form-row">
-                <label className="checkbox-row"><input type="checkbox" /> Remember Me</label>
-                <a href="#">Forgot Password?</a>
-              </div>
-              <button type="submit" className="primary-btn full-btn">Login</button>
+              <button type="submit" className="primary-btn full-btn" disabled={authLoading}>
+                {authLoading ? 'Signing in...' : 'Login'}
+              </button>
             </form>
           ) : (
             <form className="auth-form" onSubmit={handleRegisterSubmit}>
@@ -528,6 +735,7 @@ function App() {
                   type="text"
                   placeholder="Enter your full name"
                   value={registerForm.name}
+                  required
                   onChange={(e) => setRegisterForm({ ...registerForm, name: e.target.value })}
                 />
               </label>
@@ -537,6 +745,7 @@ function App() {
                   type="email"
                   placeholder="you@example.com"
                   value={registerForm.email}
+                  required
                   onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
                 />
               </label>
@@ -547,6 +756,8 @@ function App() {
                     type={showRegisterPassword ? 'text' : 'password'}
                     placeholder="Create password"
                     value={registerForm.password}
+                    minLength={6}
+                    required
                     onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
                   />
                   <button type="button" className="toggle-password" onClick={() => setShowRegisterPassword((prev) => !prev)}>
@@ -560,11 +771,35 @@ function App() {
                   type="password"
                   placeholder="Confirm password"
                   value={registerForm.confirmPassword}
+                  required
                   onChange={(e) => setRegisterForm({ ...registerForm, confirmPassword: e.target.value })}
                 />
               </label>
-              <button type="submit" className="primary-btn full-btn">Register</button>
+              <button type="submit" className="primary-btn full-btn" disabled={authLoading}>
+                {authLoading ? 'Creating account...' : 'Register'}
+              </button>
             </form>
+          )}
+          <div className="divider"><span>or continue with</span></div>
+          {isLocalBackend ? (
+            <p className="form-message">
+              Google sign-in needs a configured Supabase project and Google OAuth credentials. Local email signup and login are ready.
+            </p>
+          ) : (
+            <button
+              type="button"
+              className="social-btn wide google-auth-btn"
+              onClick={handleGoogleSignIn}
+              disabled={authLoading}
+            >
+              <svg aria-hidden="true" viewBox="0 0 48 48" width="20" height="20">
+                <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5Z" transform="translate(0 4)" />
+                <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.72 7.18l7.66 5.94c4.47-4.13 7.1-10.2 7.1-17.59Z" />
+                <path fill="#FBBC05" d="M10.53 28.59a14.4 14.4 0 0 1 0-9.18l-7.98-6.19a23.9 23.9 0 0 0 0 21.56l7.98-6.19Z" transform="translate(0 4)" />
+                <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.9-5.86l-7.66-5.94c-2.13 1.43-4.85 2.28-8.24 2.28-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48Z" transform="translate(0 -4)" />
+              </svg>
+              {authLoading ? 'Connecting to Google...' : 'Continue with Google'}
+            </button>
           )}
         </div>
 
@@ -595,17 +830,21 @@ function App() {
       <div className="page-header">
         <div>
           <span className="eyebrow">Dashboard</span>
-          <h2>Welcome back, Ava</h2>
+          <h2>Welcome back, {user?.name?.split(' ')[0] || 'Learner'}</h2>
         </div>
-        <button className="primary-btn">Continue Quiz</button>
+        <button className="primary-btn" onClick={() => quizzes[0] && handleStartQuiz(quizzes[0])} disabled={!quizzes.length}>
+          Continue Quiz
+        </button>
       </div>
 
       <div className="profile-banner">
         <div className="profile-summary">
-          <div className="avatar">AJ</div>
+          {user?.avatar_url
+            ? <img className="avatar" src={user.avatar_url} alt="" />
+            : <div className="avatar">{user?.name?.slice(0, 2).toUpperCase() || 'U'}</div>}
           <div>
-            <h3>{userProfile.fullName}</h3>
-            <p>{userProfile.email}</p>
+            <h3>{user?.name}</h3>
+            <p>{user?.email}</p>
           </div>
         </div>
         <div className="badge-row">
@@ -615,11 +854,12 @@ function App() {
       </div>
 
       <div className="stats-grid dashboard-stats">
-        <div className="stat-card"><label>Total Quizzes</label><strong>42</strong></div>
-        <div className="stat-card"><label>Average Score</label><strong>87%</strong></div>
-        <div className="stat-card"><label>Best Score</label><strong>98%</strong></div>
-        <div className="stat-card"><label>Leaderboard Rank</label><strong>#6</strong></div>
+        <div className="stat-card"><label>Total Quizzes</label><strong>{userAttempts.length}</strong></div>
+        <div className="stat-card"><label>Average Score</label><strong>{averageAttemptScore}%</strong></div>
+        <div className="stat-card"><label>Best Score</label><strong>{bestAttemptScore}%</strong></div>
+        <div className="stat-card"><label>Leaderboard Rank</label><strong>{userRank ? `#${userRank}` : '—'}</strong></div>
       </div>
+      {attemptsError ? <div className="form-message error">{attemptsError}</div> : null}
 
       <div className="content-grid dashboard-grid">
         <div className="panel-box">
@@ -628,15 +868,17 @@ function App() {
             <span className="tag">Live</span>
           </div>
           <div className="quiz-list">
-            {sampleQuizzes.slice(0, 3).map((quiz) => (
+            {quizLoading ? <p>Loading quizzes...</p> : null}
+            {!quizLoading && quizzes.slice(0, 3).map((quiz) => (
               <div key={quiz.id} className="quiz-row">
                 <div>
                   <strong>{quiz.title}</strong>
                   <small>{quiz.category}</small>
                 </div>
-                <button className="primary-btn small-btn">Resume</button>
+                <button className="primary-btn small-btn" onClick={() => handleStartQuiz(quiz)}>Start</button>
               </div>
             ))}
+            {!quizLoading && quizzes.length === 0 ? <p>No quizzes available yet.</p> : null}
           </div>
         </div>
 
@@ -645,19 +887,21 @@ function App() {
             <h3>Recent Activity</h3>
           </div>
           <div className="activity-list">
-            {recentActivity.map((item) => (
-              <div key={item.name} className="activity-row">
+            {attemptsLoading ? <p>Loading recent activity...</p> : null}
+            {!attemptsLoading && userAttempts.slice(0, 5).map((item) => (
+              <div key={item.id} className="activity-row">
                 <div>
-                  <strong>{item.name}</strong>
-                  <small>{item.date}</small>
+                  <strong>{item.quizzes?.title || 'Quiz'}</strong>
+                  <small>{new Date(item.created_at).toLocaleDateString()}</small>
                 </div>
                 <div className="activity-metrics">
-                  <span>{item.score}/20</span>
-                  <span>{item.percentage}%</span>
-                  <span className="status-pill">{item.status}</span>
+                  <span>{item.score}/{item.total_questions}</span>
+                  <span>{item.total_questions ? Math.round((item.score / item.total_questions) * 100) : 0}%</span>
+                  <span className="status-pill">Completed</span>
                 </div>
               </div>
             ))}
+            {!attemptsLoading && userAttempts.length === 0 ? <p>No quiz attempts yet.</p> : null}
           </div>
         </div>
       </div>
@@ -667,12 +911,12 @@ function App() {
           <h3>Recommended Quizzes</h3>
         </div>
         <div className="recommended-grid">
-          {categories.slice(0, 4).map((quiz) => (
+          {quizzes.slice(0, 4).map((quiz, index) => (
             <div key={quiz.id} className="mini-quiz-card">
-              <div className="category-icon" style={{ background: `${quiz.color}22`, color: quiz.color }}>{quiz.icon}</div>
-              <h4>{quiz.name}</h4>
-              <p>{quiz.questions} questions</p>
-              <button className="secondary-btn small-btn">Try Now</button>
+              <div className="category-icon" style={{ background: `${badgeColors[index % badgeColors.length]}22`, color: badgeColors[index % badgeColors.length] }}>{quiz.category.slice(0, 1)}</div>
+              <h4>{quiz.title}</h4>
+              <p>{quiz.questions.length} questions</p>
+              <button className="secondary-btn small-btn" onClick={() => handleStartQuiz(quiz)}>Try Now</button>
             </div>
           ))}
         </div>
@@ -687,17 +931,19 @@ function App() {
         <h2>Explore by subject</h2>
       </div>
       <div className="category-grid detailed-grid">
-        {categories.map((category) => (
+        {categoriesLoading ? <p>Loading categories...</p> : null}
+        {categoriesError ? <div className="form-message error">{categoriesError}</div> : null}
+        {!categoriesLoading && !categoriesError && categories.map((category, index) => (
           <div key={category.id} className="category-card large-card">
-            <div className="category-icon" style={{ background: `${category.color}22`, color: category.color }}>{category.icon}</div>
+            <div className="category-icon" style={{ background: `${badgeColors[index % badgeColors.length]}22`, color: badgeColors[index % badgeColors.length] }}>{category.icon}</div>
             <h3>{category.name}</h3>
             <p>{category.description}</p>
             <div className="detail-row">
-              <span>{category.questions} Questions</span>
+              <span>{category.questionCount} Questions</span>
               <span>{category.difficulty}</span>
             </div>
             <div className="detail-row">
-              <span>{category.attempts} attempts</span>
+              <span>{category.quizCount} Quizzes</span>
               <strong>{'★'.repeat(4)}</strong>
             </div>
             <button
@@ -719,16 +965,17 @@ function App() {
     <section className="container quiz-selection">
       <div className="section-heading">
         <span className="eyebrow">Category</span>
-        <h2>{selectedCategory}</h2>
+        <h2>{searchTerm ? `Search: ${searchTerm}` : selectedCategory}</h2>
       </div>
       {quizError ? <div className="form-message error">{quizError}</div> : null}
       <div className="quiz-list-panel">
-        {filteredQuizzes.length === 0 ? (
+        {quizLoading ? <div className="panel-box empty-state"><h3>Loading quizzes...</h3></div> : null}
+        {!quizLoading && filteredQuizzes.length === 0 ? (
           <div className="panel-box empty-state">
             <h3>No quiz available</h3>
-            <p>There are no quizzes for this category yet. Please select another category.</p>
+            <p>There are no quizzes matching this category or search yet. Try another search or category.</p>
           </div>
-        ) : (
+        ) : !quizLoading ? (
           filteredQuizzes.map((quiz) => (
             <div key={quiz.id} className="quiz-card">
               <div className="quiz-card-top">
@@ -745,12 +992,13 @@ function App() {
               <button
                 className="primary-btn small-btn"
                 onClick={() => handleStartQuiz(quiz)}
+                disabled={!quiz.questions.length}
               >
-                {quizLoading ? 'Loading...' : 'Start Quiz'}
+                {quiz.questions.length ? 'Start Quiz' : 'No Questions'}
               </button>
             </div>
           ))
-        )}
+        ) : null}
       </div>
     </section>
   );
@@ -789,7 +1037,7 @@ function App() {
           </div>
           <div className="quiz-header-actions">
             <div className="timer-box">Time Remaining: {formatTime(timeLeft)}</div>
-            <div className="score-box">Score: {score}</div>
+            <div className="score-box">Answered: {Object.values(answers).filter(Boolean).length}</div>
           </div>
         </div>
 
@@ -865,7 +1113,10 @@ function App() {
             <div><label>Wrong Answers</label><strong>{wrong}</strong></div>
             <div><label>Time Taken</label><strong>{formatTime((currentQuiz.timeLimit * 60) - timeLeft)}</strong></div>
           </div>
-          <p className="result-status">Performance: <span>Excellent!</span></p>
+          <p className="result-status">Performance: <span>{percentage >= 80 ? 'Excellent!' : percentage >= 60 ? 'Good work!' : 'Keep practicing!'}</span></p>
+          {attemptSaving ? <p className="form-message">Saving your result...</p> : null}
+          {attemptSaved ? <p className="form-message success">Your result has been saved.</p> : null}
+          {attemptSaveError ? <div className="form-message error">{attemptSaveError}</div> : null}
           <div className="result-actions">
             <button className="primary-btn" onClick={() => navigate('/analytics')}>Review Answers</button>
             <button className="secondary-btn" onClick={() => {
@@ -889,11 +1140,17 @@ function App() {
         <span className="eyebrow">Performance Analytics</span>
         <h2>Track your progress</h2>
       </div>
+      {attemptsLoading ? <div className="panel-box empty-state"><h3>Loading your analytics...</h3></div> : null}
+      {attemptsError ? <div className="form-message error">{attemptsError}</div> : null}
+      {!attemptsLoading && !attemptsError && userAttempts.length === 0
+        ? <div className="panel-box empty-state"><h3>No quiz data yet</h3><p>Complete a quiz to see your performance analytics.</p></div>
+        : null}
+      {!attemptsLoading && !attemptsError && userAttempts.length > 0 ? (
       <div className="analytics-grid">
         <div className="panel-box chart-panel">
           <h3>Score Over Time</h3>
           <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={analyticsData.lineData}>
+            <LineChart data={analyticsLineData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="name" />
               <YAxis />
@@ -906,7 +1163,7 @@ function App() {
         <div className="panel-box chart-panel">
           <h3>Category-wise Performance</h3>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={analyticsData.barData}>
+            <BarChart data={analyticsBarData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="name" />
               <YAxis />
@@ -921,8 +1178,8 @@ function App() {
           <h3>Correct vs Incorrect</h3>
           <ResponsiveContainer width="100%" height={220}>
             <PieChart>
-              <Pie data={analyticsData.pieData} dataKey="value" innerRadius={50} outerRadius={80} paddingAngle={2}>
-                {analyticsData.pieData.map((entry, index) => (
+              <Pie data={analyticsPieData} dataKey="value" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                {analyticsPieData.map((entry, index) => (
                   <Cell key={entry.name} fill={index === 0 ? '#22c55e' : '#f97316'} />
                 ))}
               </Pie>
@@ -931,33 +1188,41 @@ function App() {
           </ResponsiveContainer>
         </div>
       </div>
+      ) : null}
     </section>
   );
 
-  const renderLeaderboard = () => (
+  const renderLeaderboard = () => {
+    const second = leaderboard[1];
+    const first = leaderboard[0];
+    const third = leaderboard[2];
+    const podiumEntry = (entry, place, className) => entry ? (
+      <div className={`podium-card ${className}`} key={entry.user_id}>
+        <span>{place}</span>
+        <h3>{entry.username}</h3>
+        <strong>{Number(entry.total_score).toLocaleString()}</strong>
+      </div>
+    ) : null;
+
+    return (
     <section className="container leaderboard-page">
       <div className="section-heading">
         <span className="eyebrow">Leaderboard</span>
         <h2>See who dominates the rankings</h2>
       </div>
 
-      <div className="podium">
-        <div className="podium-card second">
-          <span>2</span>
-          <h3>David</h3>
-          <strong>9,015</strong>
+      {leaderboardLoading ? <div className="panel-box empty-state"><h3>Loading leaderboard...</h3></div> : null}
+      {leaderboardError ? <div className="form-message error">{leaderboardError}</div> : null}
+      {!leaderboardLoading && !leaderboardError && leaderboard.length === 0
+        ? <div className="panel-box empty-state"><h3>No scores yet</h3><p>Complete a quiz to appear on the leaderboard.</p></div>
+        : null}
+      {!leaderboardLoading && !leaderboardError && leaderboard.length > 0 ? (
+        <div className="podium">
+          {podiumEntry(second, 2, 'second')}
+          {podiumEntry(first, 1, 'first')}
+          {podiumEntry(third, 3, 'third')}
         </div>
-        <div className="podium-card first">
-          <span>1</span>
-          <h3>Ariana</h3>
-          <strong>9,230</strong>
-        </div>
-        <div className="podium-card third">
-          <span>3</span>
-          <h3>Priya</h3>
-          <strong>8,850</strong>
-        </div>
-      </div>
+      ) : null}
 
       <div className="leaderboard-table panel-box">
         <div className="table-head">
@@ -967,37 +1232,42 @@ function App() {
           <span>Quizzes</span>
           <span>Accuracy</span>
         </div>
-        {leaderboardData.map((entry) => (
-          <div key={entry.name} className={`table-row ${entry.name === 'Ava Johnson' ? 'highlight' : ''}`}>
+        {leaderboard.map((entry) => (
+          <div key={entry.user_id} className={`table-row ${entry.user_id === user?.id ? 'highlight' : ''}`}>
             <span>#{entry.rank}</span>
-            <span>{entry.badge} {entry.name}</span>
-            <span>{entry.points}</span>
+            <span>{entry.avatar_url ? <img className="avatar" src={entry.avatar_url} alt="" /> : null} {entry.username}</span>
+            <span>{Number(entry.total_score).toLocaleString()}</span>
             <span>{entry.quizzes}</span>
-            <span>{entry.accuracy}%</span>
+            <span>{Number(entry.accuracy || 0)}%</span>
           </div>
         ))}
       </div>
     </section>
-  );
+    );
+  };
 
   const renderProfile = () => (
     <section className="container profile-page">
       <div className="profile-layout panel-box">
+        {profileLoading ? <p>Loading your profile...</p> : null}
+        {profileError ? <div className="form-message error">{profileError}</div> : null}
         <div className="profile-hero">
-          <div className="avatar large">AJ</div>
+          {user?.avatar_url
+            ? <img className="avatar large" src={user.avatar_url} alt="" />
+            : <div className="avatar large">{user?.name?.slice(0, 2).toUpperCase() || 'U'}</div>}
           <div>
-            <h2>{userProfile.fullName}</h2>
-            <p>{userProfile.email}</p>
-            <span className="muted">Joined {userProfile.joinDate}</span>
+            <h2>{user?.name}</h2>
+            <p>{user?.email}</p>
+            <span className="muted">Joined {profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : '—'}</span>
           </div>
         </div>
 
         <div className="stats-grid profile-grid">
-          <div className="stat-card"><label>Total Quizzes</label><strong>{userProfile.totalQuizzes}</strong></div>
-          <div className="stat-card"><label>Total Points</label><strong>{userProfile.totalPoints}</strong></div>
-          <div className="stat-card"><label>Average Score</label><strong>{userProfile.averageScore}%</strong></div>
-          <div className="stat-card"><label>Best Score</label><strong>{userProfile.bestScore}%</strong></div>
-          <div className="stat-card"><label>Current Streak</label><strong>{userProfile.streak} days</strong></div>
+          <div className="stat-card"><label>Total Quizzes</label><strong>{userAttempts.length}</strong></div>
+          <div className="stat-card"><label>Total Points</label><strong>{profile?.total_score ?? 0}</strong></div>
+          <div className="stat-card"><label>Average Score</label><strong>{averageAttemptScore}%</strong></div>
+          <div className="stat-card"><label>Best Score</label><strong>{bestAttemptScore}%</strong></div>
+          <div className="stat-card"><label>Questions Completed</label><strong>{attemptsTotalQuestions}</strong></div>
         </div>
 
         <div className="achievements panel-box inner-panel">
@@ -1012,97 +1282,124 @@ function App() {
     </section>
   );
 
-  const renderAdmin = () => (
-    <section className="container admin-page">
-      <div className="section-heading">
-        <span className="eyebrow">Admin Panel</span>
-        <h2>Platform overview</h2>
-      </div>
-      <div className="stats-grid dashboard-stats">
-        <div className="stat-card"><label>Total Users</label><strong>1842</strong></div>
-        <div className="stat-card"><label>Total Quizzes</label><strong>96</strong></div>
-        <div className="stat-card"><label>Total Questions</label><strong>{currentQuiz.questions.length}</strong></div>
-        <div className="stat-card"><label>Average Score</label><strong>78%</strong></div>
-      </div>
-
-      <div className="admin-panels">
-        <div className="panel-box admin-panel">
-          <h3>Manage Users</h3>
-          <div className="table-head small-table">
-            <span>Name</span>
-            <span>Email</span>
-            <span>Status</span>
+  const renderAdmin = () => {
+    if (user?.role !== 'admin') {
+      return (
+        <section className="container admin-page">
+          <div className="panel-box">
+            <h2>Admin access required</h2>
+            <p>Sign in with the configured administrator account to view registered user details.</p>
+            <button className="primary-btn" onClick={() => navigate('/auth')}>Go to Login</button>
           </div>
-          {adminUsers.map((user) => (
-            <div key={user.id} className="table-row small-row">
-              <span>{user.name}</span>
-              <span>{user.email}</span>
-              <span>{user.status}</span>
+        </section>
+      );
+    }
+
+    return (
+      <section className="container admin-page">
+        <div className="section-heading">
+          <span className="eyebrow">Admin Panel</span>
+          <h2>Registered users</h2>
+        </div>
+        <div className="stats-grid dashboard-stats">
+          <div className="stat-card"><label>Total Users</label><strong>{managedUsers.length}</strong></div>
+          <div className="stat-card"><label>Database</label><strong>MongoDB</strong></div>
+          <div className="stat-card"><label>Total Questions</label><strong>{currentQuiz.questions.length}</strong></div>
+          <div className="stat-card"><label>Signed in as</label><strong>{user.email}</strong></div>
+        </div>
+
+        <div className="admin-panels">
+          <div className="panel-box admin-panel">
+            <h3>User accounts</h3>
+            {adminLoading ? <p>Loading registered users...</p> : null}
+            {adminLoadError ? <div className="form-message error">{adminLoadError}</div> : null}
+            <div className="table-head small-table">
+              <span>Name</span>
+              <span>Email</span>
+              <span>Last login</span>
             </div>
-          ))}
+            {managedUsers.map((account) => (
+              <div key={account._id} className="table-row small-row">
+                <span>{account.name}</span>
+                <span>{account.email}</span>
+                <span>{account.lastLoginAt ? new Date(account.lastLoginAt).toLocaleString() : 'Never'}</span>
+              </div>
+            ))}
+            {!adminLoading && !adminLoadError && managedUsers.length === 0 ? <p>No registered accounts yet.</p> : null}
+          </div>
+          <div className="panel-box admin-panel">
+            <h3>Question Management</h3>
+            <form className="admin-form" onSubmit={handleAddQuestion}>
+              <input
+                type="text"
+                placeholder="Question text"
+                value={adminQuestionForm.question}
+                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, question: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Option A"
+                value={adminQuestionForm.optionA}
+                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionA: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Option B"
+                value={adminQuestionForm.optionB}
+                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionB: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Option C"
+                value={adminQuestionForm.optionC}
+                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionC: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Option D"
+                value={adminQuestionForm.optionD}
+                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionD: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Correct answer"
+                value={adminQuestionForm.correctAnswer}
+                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, correctAnswer: e.target.value })}
+              />
+              {adminQuestionMessage ? <div className={`form-message ${adminQuestionMessage.includes('successfully') ? 'success' : 'error'}`}>{adminQuestionMessage}</div> : null}
+              <button type="submit" className="primary-btn full-btn">Add Question</button>
+            </form>
+          </div>
         </div>
-        <div className="panel-box admin-panel">
-          <h3>Question Management</h3>
-          <form className="admin-form" onSubmit={handleAddQuestion}>
-            <input
-              type="text"
-              placeholder="Question text"
-              value={adminQuestionForm.question}
-              onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, question: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="Option A"
-              value={adminQuestionForm.optionA}
-              onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionA: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="Option B"
-              value={adminQuestionForm.optionB}
-              onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionB: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="Option C"
-              value={adminQuestionForm.optionC}
-              onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionC: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="Option D"
-              value={adminQuestionForm.optionD}
-              onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionD: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="Correct answer"
-              value={adminQuestionForm.correctAnswer}
-              onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, correctAnswer: e.target.value })}
-            />
-            {adminQuestionMessage ? <div className={`form-message ${adminQuestionMessage.includes('successfully') ? 'success' : 'error'}`}>{adminQuestionMessage}</div> : null}
-            <button type="submit" className="primary-btn full-btn">Add Question</button>
-          </form>
-        </div>
-      </div>
-    </section>
-  );
+      </section>
+    );
+  };
 
   return (
     <>
       <div className="app-shell">
-        <Navbar darkMode={darkMode} toggleTheme={toggleTheme} user={user} onLogout={handleLogout} />
+        <Navbar
+          darkMode={darkMode}
+          toggleTheme={toggleTheme}
+          user={user}
+          onLogout={handleLogout}
+          searchTerm={searchTerm}
+          onSearchChange={(value) => { setSearchTerm(value); setSelectedCategory('All'); }}
+          onSearchSubmit={() => { setSelectedCategory('All'); navigate('/quizzes'); }}
+          onAuthModeChange={(mode) => { setAuthMode(mode); setAuthError(''); setAuthSuccess(''); }}
+        />
         <main>
           <Routes>
             <Route path="/" element={renderLandingPage()} />
             <Route path="/auth" element={renderAuth()} />
-            <Route path="/dashboard" element={renderDashboard()} />
+            <Route path="/dashboard" element={<RequireAuth>{renderDashboard()}</RequireAuth>} />
             <Route path="/categories" element={renderCategories()} />
             <Route path="/quizzes" element={renderQuizSelection()} />
-            <Route path="/quiz" element={submitted ? renderResults() : renderQuiz()} />
-            <Route path="/analytics" element={renderAnalytics()} />
+            <Route path="/quiz" element={<RequireAuth>{submitted ? renderResults() : renderQuiz()}</RequireAuth>} />
+            <Route path="/analytics" element={<RequireAuth>{renderAnalytics()}</RequireAuth>} />
             <Route path="/leaderboard" element={renderLeaderboard()} />
-            <Route path="/profile" element={renderProfile()} />
+            <Route path="/profile" element={<RequireAuth>{renderProfile()}</RequireAuth>} />
+            <Route path="/patient-intake" element={<PatientIntake />} />
             <Route path="/admin" element={renderAdmin()} />
           </Routes>
         </main>
@@ -1124,7 +1421,7 @@ function App() {
                 </div>
                 <div>
                   <strong>QuizMaster AI</strong>
-                  <span>Online assistant</span>
+                  <span>{chatPending ? 'Thinking...' : 'AI + built-in guide'}</span>
                 </div>
               </div>
               <button className="chat-close" onClick={() => setChatOpen(false)} aria-label="Close AI assistant">
@@ -1146,8 +1443,9 @@ function App() {
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 placeholder="Ask about quizzes, dashboard, rankings..."
+                disabled={chatPending}
               />
-              <button type="submit" aria-label="Send message">
+              <button type="submit" aria-label="Send message" disabled={chatPending || !chatInput.trim()}>
                 <Send size={16} />
               </button>
             </form>

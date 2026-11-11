@@ -1,14 +1,14 @@
 services:
   - type: web
-    name: quizmaster-api
+    name: quizmaster
     env: node
-    buildCommand: npm install && npm run build && cd server && npm install
-    startCommand: cd server && npm start
+    plan: free
+    buildCommand: npm ci && npm run build && npm --prefix server ci
+    startCommand: npm --prefix server run seed && npm --prefix server start
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 5000
       - key: MONGO_URI
         sync: false
       - key: JWT_SECRET

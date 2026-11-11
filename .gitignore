@@ -11,6 +11,11 @@ node_modules
 dist
 dist-ssr
 *.local
+server/data/mongodb/
+.env
+.env.*
+!.env.example
+!**/.env.example
 
 # Editor directories and files
 .vscode/*
