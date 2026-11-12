@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { checkSupabaseConnection, isSupabaseConfigured, supabase } from '../lib/supabaseClient';
-import { getProfile, login as loginLocal, register as registerLocal } from '../api';
+import { getProfile, login as loginLocal, logout as logoutLocal, register as registerLocal } from '../api';
 import { isLocalBackend } from '../lib/appMode';
 import { AuthContext } from './authContext';
 import { useAuth } from './useAuth';
@@ -11,7 +11,12 @@ function makeLocalSession(user) {
     user: {
       id: String(user.id || user._id),
       email: user.email,
-      user_metadata: { username: user.name, role: user.role },
+      user_metadata: {
+        username: user.name,
+        role: user.role,
+        branchId: user.branchId || '',
+        semester: user.semester || null,
+      },
     },
   };
 }
@@ -22,6 +27,8 @@ function makeLocalProfile(user) {
     username: user.name,
     avatar_url: user.profileImage || null,
     total_score: user.points || 0,
+    branch_id: user.branchId || '',
+    semester: user.semester || null,
     created_at: user.createdAt,
   };
 }
@@ -30,11 +37,11 @@ export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(() => (
-    isLocalBackend ? Boolean(localStorage.getItem('quiz-token')) : isSupabaseConfigured
+    isLocalBackend ? true : isSupabaseConfigured
   ));
   const [profileLoadedFor, setProfileLoadedFor] = useState(null);
   const [profileError, setProfileError] = useState('');
-  const [configurationError] = useState(isSupabaseConfigured
+  const [configurationError] = useState(isLocalBackend || isSupabaseConfigured
     ? ''
     : 'Supabase is not configured. Copy .env.example to .env and add your project URL and anon key.');
   const userId = session?.user?.id;
@@ -43,9 +50,6 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (isLocalBackend) {
-      const token = localStorage.getItem('quiz-token');
-      if (!token) return undefined;
-
       let active = true;
       getProfile()
         .then((user) => {
@@ -56,7 +60,7 @@ export function AuthProvider({ children }) {
         })
         .catch((error) => {
           localStorage.removeItem('quiz-token');
-          if (active) setProfileError(error.message || 'Unable to restore your local account.');
+          if (active && error.status !== 401) setProfileError(error.message || 'Unable to restore your local account.');
         })
         .finally(() => {
           if (active) setLoading(false);
@@ -144,7 +148,6 @@ export function AuthProvider({ children }) {
   const signIn = async (email, password) => {
     if (isLocalBackend) {
       const data = await loginLocal({ email, password });
-      localStorage.setItem('quiz-token', data.token);
       setSession(makeLocalSession(data.user));
       setProfile(makeLocalProfile(data.user));
       setProfileLoadedFor(String(data.user.id || data.user._id));
@@ -156,10 +159,9 @@ export function AuthProvider({ children }) {
     return data;
   };
 
-  const signUp = async ({ username, email, password }) => {
+  const signUp = async ({ username, email, password, branchId, semester }) => {
     if (isLocalBackend) {
-      const data = await registerLocal({ name: username, email, password });
-      localStorage.setItem('quiz-token', data.token);
+      const data = await registerLocal({ name: username, email, password, branchId, semester });
       setSession(makeLocalSession(data.user));
       setProfile(makeLocalProfile(data.user));
       setProfileLoadedFor(String(data.user.id || data.user._id));
@@ -191,10 +193,14 @@ export function AuthProvider({ children }) {
 
   const signOut = async () => {
     if (isLocalBackend) {
-      localStorage.removeItem('quiz-token');
-      setSession(null);
-      setProfile(null);
-      setProfileLoadedFor(null);
+      try {
+        await logoutLocal();
+      } finally {
+        localStorage.removeItem('quiz-token');
+        setSession(null);
+        setProfile(null);
+        setProfileLoadedFor(null);
+      }
       return;
     }
     if (!supabase) throw new Error('Supabase is not configured. Add your project URL and anon key to .env.');

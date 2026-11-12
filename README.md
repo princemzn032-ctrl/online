@@ -39,7 +39,7 @@ The [`vercel.json`](./vercel.json) configuration builds the Vite frontend as a s
    - `JWT_SECRET`: a unique random secret of at least 32 characters.
    - `FRONTEND_URL` (optional): the exact `https://` origin if using a custom domain.
 3. Apply the variables to Production (and Preview if needed), then redeploy.
-4. After the first deployment, seed the General Knowledge quiz once using a trusted local environment configured with the same Atlas database URI: `npm --prefix server run seed`. The seed removes other quizzes/categories and non-General-Knowledge attempts.
+4. After the first deployment, seed the initial quiz catalog from a trusted local environment configured with the same Atlas database URI: `npm --prefix server run seed`. The seed upserts the General Knowledge quiz and six engineering sample quizzes; it does not delete existing quizzes or attempts.
 5. Check `https://<your-vercel-domain>/api/health`; it should report `"status":"ok"` and `"database":"connected"`.
 
 The MongoDB connection must be network-accessible from Vercel. Do not put database credentials or JWT secrets in the repository or in `vercel.json`.

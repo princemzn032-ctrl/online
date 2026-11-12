@@ -1,29 +1,33 @@
 :root {
-  --bg: #f6f6f6;
-  --bg-elevated: rgba(255, 255, 255, 0.7);
-  --panel-bg: rgba(17, 17, 17, 0.24);
-  --panel-strong: rgba(17, 17, 17, 0.74);
-  --text-strong: #111827;
-  --text-soft: #4b5563;
-  --text-muted: #6b7280;
-  --border-color: rgba(107, 114, 128, 0.18);
-  --soft-shadow: 0 30px 90px rgba(17, 24, 39, 0.12);
-  --glass-shadow: 0 20px 50px rgba(17, 24, 39, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.42);
-  --hero-glow: rgba(229, 9, 20, 0.18);
+  color-scheme: dark;
+  --bg: #020617;
+  --bg-elevated: #0f172a;
+  --panel-bg: #0f172a;
+  --panel-strong: #0f172a;
+  --text-strong: #f8fafc;
+  --text-soft: #cbd5e1;
+  --text-muted: #94a3b8;
+  --border-color: #1e293b;
+  --soft-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  --glass-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  --hero-glow: rgba(59, 130, 246, 0.18);
+  --accent: #3b82f6;
 }
 
-body[data-theme='dark'] {
-  --bg: #090909;
-  --bg-elevated: rgba(20, 20, 20, 0.8);
-  --panel-bg: rgba(20, 20, 20, 0.62);
-  --panel-strong: rgba(17, 17, 17, 0.95);
-  --text-strong: #f5f5f5;
-  --text-soft: #d1d5db;
-  --text-muted: #9ca3af;
-  --border-color: rgba(255, 255, 255, 0.12);
-  --soft-shadow: 0 35px 80px rgba(0, 0, 0, 0.52);
-  --glass-shadow: 0 25px 70px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  --hero-glow: rgba(229, 9, 20, 0.28);
+body[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-elevated: #ffffff;
+  --panel-bg: #f7f8fa;
+  --panel-strong: #ffffff;
+  --text-strong: #172033;
+  --text-soft: #64748b;
+  --text-muted: #8490a3;
+  --border-color: #e5e7eb;
+  --soft-shadow: 0 12px 32px rgba(23, 32, 51, 0.06);
+  --glass-shadow: 0 6px 20px rgba(23, 32, 51, 0.05);
+  --hero-glow: rgba(49, 87, 213, 0.08);
+  --accent: #3157d5;
 }
 
 * {
@@ -37,19 +41,16 @@ html {
 body {
   margin: 0;
   font-family: Inter, 'Segoe UI', sans-serif;
-  background:
-    radial-gradient(circle at top left, rgba(229, 9, 20, 0.2), transparent 18%),
-    radial-gradient(circle at 85% 12%, rgba(239, 68, 68, 0.18), transparent 20%),
-    radial-gradient(circle at bottom right, rgba(248, 113, 113, 0.09), transparent 18%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 20%),
-    var(--bg);
+  background: var(--bg);
   color: var(--text-strong);
   transition: background 0.25s ease, color 0.25s ease;
   min-height: 100vh;
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 

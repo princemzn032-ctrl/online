@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let localMongo;
 
 const isLoopbackMongo = (uri) => {
   if (!uri) return true;
@@ -41,7 +42,7 @@ const connectDB = async () => {
 
   const databasePath = path.resolve(__dirname, '../data/mongodb');
   await mkdir(databasePath, { recursive: true });
-  const localMongo = await MongoMemoryServer.create({
+  localMongo = await MongoMemoryServer.create({
     binary: { version: '7.0.14' },
     instance: {
       dbPath: databasePath,
@@ -56,6 +57,7 @@ const connectDB = async () => {
     return conn;
   } catch (error) {
     await localMongo.stop();
+    localMongo = undefined;
     throw new Error(`Development MongoDB connection failed: ${error.message}`, { cause: error });
   }
 };

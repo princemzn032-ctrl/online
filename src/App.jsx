@@ -1,13 +1,25 @@
 import './App.css';
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Routes, Route, useNavigate, useLocation, Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
 import {
+  ArrowUpRight,
   ArrowRight,
+  ArrowLeft,
+  BookOpen,
   Bot,
   CheckCircle2,
+  Clock3,
+  Eye,
+  EyeOff,
+  LockKeyhole,
+  Mail,
   MessageCircle,
+  ShieldCheck,
+  Sparkles,
   Send,
+  Target,
   X,
+  Zap,
 } from 'lucide-react';
 import {
   LineChart,
@@ -25,22 +37,40 @@ import {
 } from 'recharts';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
-import PatientIntake from './components/PatientIntake';
-import { getAdminUsers, sendChatMessage } from './api';
+import BranchesPage from './components/BranchesPage';
+import PracticePage from './components/PracticePage';
+import AdminPanel from './components/AdminPanel';
+import PasswordResetPage from './components/PasswordResetPage';
+import {
+  getBranches,
+  getDashboardPerformance,
+  getDashboardSummary,
+  getSubjects,
+  saveQuizAnswer,
+  sendChatMessage,
+  setQuestionReview,
+  startQuizAttempt,
+  submitSavedAttempt,
+  updateProfile,
+} from './api';
 import { getAssistantReply } from '../shared/assistant';
 import { RequireAuth } from './auth/AuthContext.jsx';
 import { useAuth } from './auth/useAuth';
 import { isLocalBackend } from './lib/appMode';
+import { getTypicalSubjectCount } from './lib/branchMetrics';
 import {
-  fetchCategories,
   fetchLeaderboard,
   fetchPlatformStats,
   fetchQuizzes,
   fetchUserAttempts,
-  saveAttempt,
 } from './lib/quizData';
 
 const badgeColors = ['#fbbf24', '#f97316', '#8b5cf6', '#10b981', '#60a5fa'];
+
+function formatScaleStat(value, minimum) {
+  const count = Number(value);
+  return `${Math.max(Number.isFinite(count) ? count : 0, minimum).toLocaleString()}+`;
+}
 
 function getAuthErrorMessage(error, fallback) {
   const message = error?.message || '';
@@ -71,6 +101,8 @@ function App() {
     email: authUser.email,
     avatar_url: profile?.avatar_url,
     role: authUser.user_metadata?.role,
+    branchId: profile?.branch_id || authUser.user_metadata?.branchId || '',
+    semester: profile?.semester || authUser.user_metadata?.semester || null,
   } : null;
   const [darkMode, setDarkMode] = useState(() => {
     const savedTheme = localStorage.getItem('quiz-theme');
@@ -78,7 +110,6 @@ function App() {
   });
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
-  const [lastStartedQuizId, setLastStartedQuizId] = useState(() => sessionStorage.getItem('quiz-last-started') || '');
   const [currentQuiz, setCurrentQuiz] = useState({ id: '', title: '', category: '', timeLimit: 0, questions: [] });
   const [answers, setAnswers] = useState({});
   const [submitted, setSubmitted] = useState(false);
@@ -87,7 +118,19 @@ function App() {
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
   const [authMode, setAuthMode] = useState('login');
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
-  const [registerForm, setRegisterForm] = useState({ name: '', email: '', password: '', confirmPassword: '' });
+  const [registerForm, setRegisterForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+    branchId: '',
+    semester: '',
+  });
+  const registerPasswordsMismatch = Boolean(
+    registerForm.password
+      && registerForm.confirmPassword
+      && registerForm.password !== registerForm.confirmPassword,
+  );
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
@@ -95,17 +138,21 @@ function App() {
   const [quizLoading, setQuizLoading] = useState(true);
   const [quizzes, setQuizzes] = useState([]);
   const [quizError, setQuizError] = useState('');
-  const [categories, setCategories] = useState([]);
-  const [categoriesLoading, setCategoriesLoading] = useState(true);
-  const [categoriesError, setCategoriesError] = useState('');
   const [leaderboard, setLeaderboard] = useState([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
   const [leaderboardError, setLeaderboardError] = useState('');
+  const [leaderboardBranchId, setLeaderboardBranchId] = useState('');
+  const [leaderboardSubjectId, setLeaderboardSubjectId] = useState('');
+  const [leaderboardSubjects, setLeaderboardSubjects] = useState([]);
+  const [leaderboardPeriod, setLeaderboardPeriod] = useState('all');
   const [platformStats, setPlatformStats] = useState(null);
   const [statsError, setStatsError] = useState('');
   const [attemptsState, setAttemptsState] = useState({ userId: null, items: [] });
   const [attemptsLoadedFor, setAttemptsLoadedFor] = useState(null);
   const [attemptsErrorState, setAttemptsErrorState] = useState({ userId: null, message: '' });
+  const [dashboardSummary, setDashboardSummary] = useState(null);
+  const [dashboardPerformance, setDashboardPerformance] = useState(null);
+  const [dashboardError, setDashboardError] = useState('');
   const userAttempts = attemptsState.userId === user?.id ? attemptsState.items : [];
   const attemptsLoading = Boolean(user?.id && attemptsLoadedFor !== user.id);
   const attemptsError = attemptsErrorState.userId === user?.id ? attemptsErrorState.message : '';
@@ -113,19 +160,15 @@ function App() {
   const [attemptSaving, setAttemptSaving] = useState(false);
   const [attemptSaved, setAttemptSaved] = useState(false);
   const attemptSavingRef = useRef(false);
+  const [attemptId, setAttemptId] = useState('');
+  const [attemptResult, setAttemptResult] = useState(null);
+  const [markedForReview, setMarkedForReview] = useState([]);
+  const [branchOptions, setBranchOptions] = useState([]);
+  const [profileForm, setProfileForm] = useState({ name: '', branchId: '', semester: '' });
+  const [profileSaveMessage, setProfileSaveMessage] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
-  const [managedUsers, setManagedUsers] = useState([]);
-  const [adminLoading, setAdminLoading] = useState(true);
-  const [adminLoadError, setAdminLoadError] = useState('');
-  const [adminQuestionForm, setAdminQuestionForm] = useState({
-    question: '',
-    optionA: '',
-    optionB: '',
-    optionC: '',
-    optionD: '',
-    correctAnswer: '',
-  });
-  const [adminQuestionMessage, setAdminQuestionMessage] = useState('');
+  const [branchLoadError, setBranchLoadError] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [chatPending, setChatPending] = useState(false);
@@ -148,6 +191,12 @@ function App() {
   }, [darkMode]);
 
   useEffect(() => {
+    if (location.pathname === '/' && location.hash === '#about') {
+      document.getElementById('about')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [location.hash, location.pathname]);
+
+  useEffect(() => {
     if (authUser && location.pathname === '/auth') {
       navigate(location.state?.from?.pathname || '/dashboard', { replace: true });
     }
@@ -155,10 +204,6 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
-    fetchCategories()
-      .then((items) => { if (mounted) setCategories(items); })
-      .catch((error) => { if (mounted) setCategoriesError(error.message || 'Unable to load categories.'); })
-      .finally(() => { if (mounted) setCategoriesLoading(false); });
     fetchQuizzes()
       .then((items) => { if (mounted) setQuizzes(items); })
       .catch((error) => { if (mounted) setQuizError(error.message || 'Unable to load quizzes.'); })
@@ -166,20 +211,43 @@ function App() {
     fetchPlatformStats()
       .then((stats) => { if (mounted) setPlatformStats(stats); })
       .catch((error) => { if (mounted) setStatsError(error.message || 'Unable to load platform statistics.'); });
+    getBranches()
+      .then((items) => { if (mounted) setBranchOptions(items); })
+      .catch((error) => { if (mounted) setBranchLoadError(error.message || 'Unable to load engineering branches.'); });
 
     return () => {
       mounted = false;
     };
+
   }, []);
 
   useEffect(() => {
     let mounted = true;
-    fetchLeaderboard()
+    setLeaderboardLoading(true);
+    setLeaderboardError('');
+    fetchLeaderboard({
+      branchId: leaderboardBranchId,
+      subjectId: leaderboardSubjectId,
+      period: leaderboardPeriod === 'weekly' ? 'weekly' : '',
+    })
       .then((items) => { if (mounted) setLeaderboard(items); })
       .catch((error) => { if (mounted) setLeaderboardError(error.message || 'Unable to load the leaderboard.'); })
       .finally(() => { if (mounted) setLeaderboardLoading(false); });
     return () => { mounted = false; };
-  }, []);
+  }, [leaderboardBranchId, leaderboardSubjectId, leaderboardPeriod]);
+
+  useEffect(() => {
+    let active = true;
+    setLeaderboardSubjectId('');
+    if (!leaderboardBranchId) {
+      setLeaderboardSubjects([]);
+      return () => { active = false; };
+    }
+    getSubjects({ branchId: leaderboardBranchId })
+      .then((items) => { if (active) setLeaderboardSubjects(items); })
+      .catch((error) => { if (active) setLeaderboardError(error.message || 'Unable to load subjects.'); });
+    return () => { active = false; };
+  }, [leaderboardBranchId]);
 
   useEffect(() => {
     if (!user?.id) return undefined;
@@ -194,26 +262,49 @@ function App() {
   }, [user?.id]);
 
   useEffect(() => {
-    if (user?.role !== 'admin') {
-      return undefined;
-    }
-
+    if (!user?.id) return undefined;
     let mounted = true;
-    getAdminUsers()
-      .then((users) => {
-        if (mounted) setManagedUsers(users);
+    setDashboardError('');
+    Promise.all([getDashboardSummary(), getDashboardPerformance()])
+      .then(([summary, performance]) => {
+        if (!mounted) return;
+        setDashboardSummary(summary);
+        setDashboardPerformance(performance);
       })
       .catch((error) => {
-        if (mounted) setAdminLoadError(error.message);
-      })
-      .finally(() => {
-        if (mounted) setAdminLoading(false);
+        if (mounted) setDashboardError(error.message || 'Unable to load dashboard analytics.');
       });
+    return () => { mounted = false; };
+  }, [user?.id]);
 
-    return () => {
-      mounted = false;
-    };
-  }, [user?.role]);
+  useEffect(() => {
+    if (!profile || profile?.id !== user?.id) return;
+    setProfileForm({
+      name: user?.name || '',
+      branchId: profile.branch_id || '',
+      semester: profile.semester ? String(profile.semester) : '',
+    });
+  }, [profile, user?.id, user?.name]);
+
+  const handleProfileUpdate = async (event) => {
+    event.preventDefault();
+    setProfileSaveMessage('');
+    setProfileSaving(true);
+    try {
+      const updates = { name: profileForm.name.trim() };
+      if (profileForm.branchId && profileForm.semester) {
+        updates.branchId = profileForm.branchId;
+        updates.semester = Number(profileForm.semester);
+      }
+      await updateProfile(updates);
+      await refreshProfile();
+      setProfileSaveMessage('Profile updated.');
+    } catch (error) {
+      setProfileSaveMessage(error.message || 'Unable to update profile.');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (submitted || !currentQuiz.id) return undefined;
@@ -235,16 +326,18 @@ function App() {
   const question = currentQuiz.questions?.[activeQuestionIndex];
   const attemptsTotalQuestions = userAttempts.reduce((total, attempt) => total + attempt.total_questions, 0);
   const attemptsTotalCorrect = userAttempts.reduce((total, attempt) => total + attempt.score, 0);
-  const averageAttemptScore = attemptsTotalQuestions
-    ? Math.round((attemptsTotalCorrect / attemptsTotalQuestions) * 100)
+  const averageAttemptScore = userAttempts.length
+    ? Math.round(userAttempts.reduce((total, attempt) => total + (attempt.percentage ?? (
+      attempt.total_questions ? (attempt.score / attempt.total_questions) * 100 : 0
+    )), 0) / userAttempts.length)
     : 0;
   const bestAttemptScore = userAttempts.reduce((best, attempt) => (
-    Math.max(best, attempt.total_questions ? Math.round((attempt.score / attempt.total_questions) * 100) : 0)
+    Math.max(best, attempt.percentage ?? (attempt.total_questions ? Math.round((attempt.score / attempt.total_questions) * 100) : 0))
   ), 0);
   const userRank = leaderboard.find((entry) => entry.user_id === user?.id)?.rank;
   const analyticsLineData = [...userAttempts].reverse().map((attempt, index) => ({
     name: `${index + 1}`,
-    score: attempt.total_questions ? Math.round((attempt.score / attempt.total_questions) * 100) : 0,
+    score: attempt.percentage ?? (attempt.total_questions ? Math.round((attempt.score / attempt.total_questions) * 100) : 0),
   }));
   const analyticsCategoryMap = userAttempts.reduce((summary, attempt) => {
     const name = attempt.quizzes?.categories?.name || 'Other';
@@ -262,85 +355,55 @@ function App() {
 
   const score = resultScore ?? 0;
 
-  const handleAddQuestion = (event) => {
-    event.preventDefault();
-    setAdminQuestionMessage('');
-
-    const { question, optionA, optionB, optionC, optionD, correctAnswer } = adminQuestionForm;
-    const fields = [question, optionA, optionB, optionC, optionD, correctAnswer];
-
-    if (fields.some((field) => !field.trim())) {
-      setAdminQuestionMessage('Please fill in all question fields.');
+  const handleStartQuiz = async (quiz, questionCount) => {
+    if (!user?.id) {
+      navigate('/auth', { state: { from: { pathname: '/quizzes' } } });
       return;
     }
-
-    const options = [optionA.trim(), optionB.trim(), optionC.trim(), optionD.trim()];
-    const normalizedCorrect = correctAnswer.trim();
-
-    if (!options.includes(normalizedCorrect)) {
-      setAdminQuestionMessage('Correct answer must match one of the provided options.');
-      return;
-    }
-
-    const newQuestion = {
-      id: Date.now(),
-      question: question.trim(),
-      options,
-      correctAnswer: normalizedCorrect,
-      explanation: 'Added from admin panel',
-      marks: 1,
-    };
-
-    setCurrentQuiz((prev) => ({
-      ...prev,
-      questions: [...(prev?.questions || []), newQuestion],
-      totalMarks: (prev?.totalMarks || 0) + 1,
-    }));
-
-    setAdminQuestionForm({
-      question: '',
-      optionA: '',
-      optionB: '',
-      optionC: '',
-      optionD: '',
-      correctAnswer: '',
-    });
-    setAdminQuestionMessage('Question added successfully.');
-  };
-
-  const handleStartQuiz = (quiz) => {
-    setQuizLoading(false);
-    const quizId = String(quiz.id || quiz._id);
-    sessionStorage.setItem('quiz-last-started', quizId);
-    setLastStartedQuizId(quizId);
-    setCurrentQuiz(quiz);
-    setTimeLeft(quiz.timeLimit * 60);
-    setAnswers({});
-    setSubmitted(false);
-    setResultScore(null);
+    setQuizError('');
     setAttemptSaveError('');
-    setAttemptSaved(false);
-    attemptSavingRef.current = false;
-    setActiveQuestionIndex(0);
-    navigate('/quiz');
+    try {
+      const quizId = String(quiz.id || quiz._id);
+      const { attempt, quiz: attemptQuiz } = await startQuizAttempt({ quizId, questionCount });
+      setAttemptId(attempt.id);
+      setAttemptResult(null);
+      setCurrentQuiz({
+        ...quiz,
+        ...attemptQuiz,
+        id: quizId,
+        questions: attempt.questions,
+      });
+      setTimeLeft(Math.max(0, Math.ceil((new Date(attempt.expiresAt).getTime() - Date.now()) / 1000)));
+      setAnswers(Object.fromEntries(attempt.questions.filter((question) => question.selectedAnswer).map((question) => [
+        question.id,
+        question.selectedAnswer,
+      ])));
+      setMarkedForReview(attempt.questions.filter((question) => question.markedForReview).map((question) => question.id));
+      setSubmitted(false);
+      setResultScore(null);
+      setAttemptSaved(false);
+      attemptSavingRef.current = false;
+      setActiveQuestionIndex(0);
+      navigate('/quiz');
+    } catch (error) {
+      setQuizError(error.message || 'Unable to start this quiz. Please try again.');
+    }
   };
 
-  const handleSubmitQuiz = () => {
+  const handleSubmitQuiz = (force = false) => {
     if (submitted) return;
+    if (!force && !window.confirm('Submit this quiz now? You will not be able to change your answers.')) return;
     setSubmitted(true);
   };
 
   useEffect(() => {
-    if (!submitted || !user?.id || !currentQuiz.id || attemptSavingRef.current) return;
+    if (!submitted || !user?.id || !attemptId || attemptSavingRef.current) return;
     attemptSavingRef.current = true;
     setAttemptSaving(true);
-    saveAttempt({
-      quizId: currentQuiz.id,
-      answers,
-      timeTaken: Math.max(0, (currentQuiz.timeLimit * 60) - timeLeft),
-    })
+    submitSavedAttempt(attemptId, answers)
       .then(async (result) => {
-        setResultScore(result.score);
+        setAttemptResult(result);
+        setResultScore(result.correctCount);
         setAttemptSaved(true);
         try {
           setAttemptsState({ userId: user.id, items: await fetchUserAttempts(user.id) });
@@ -369,7 +432,7 @@ function App() {
       .finally(() => {
         setAttemptSaving(false);
       });
-  }, [answers, currentQuiz, refreshProfile, submitted, timeLeft, user?.id]);
+  }, [answers, attemptId, refreshProfile, submitted, user?.id]);
 
   const handleLoginSubmit = async (event) => {
     event.preventDefault();
@@ -411,6 +474,8 @@ function App() {
       username: registerForm.name.trim(),
       email: registerForm.email.trim(),
       password: registerForm.password,
+      branchId: registerForm.branchId,
+      semester: registerForm.semester ? Number(registerForm.semester) : undefined,
     };
     if (!details.username || !details.email || !details.password || !registerForm.confirmPassword) {
       setAuthError('Please fill in all fields.');
@@ -431,7 +496,11 @@ function App() {
     }
 
     if (details.password !== registerForm.confirmPassword) {
-      setAuthError('Passwords do not match.');
+      setAuthLoading(false);
+      return;
+    }
+    if (details.branchId && !details.semester) {
+      setAuthError('Choose a semester for your selected branch, or clear the branch selection.');
       setAuthLoading(false);
       return;
     }
@@ -520,8 +589,27 @@ function App() {
     }
   };
 
-  const handleOptionSelect = (questionId, option) => {
-    setAnswers((prev) => ({ ...prev, [questionId]: option }));
+  const handleOptionSelect = async (questionId, option) => {
+    setAnswers((previous) => ({ ...previous, [questionId]: option || '' }));
+    if (!attemptId) return;
+    try {
+      await saveQuizAnswer({ attemptId, questionId, selectedAnswer: option });
+    } catch (error) {
+      setAttemptSaveError(`Your answer could not be autosaved: ${error.message}`);
+    }
+  };
+
+  const handleToggleReview = async (questionId) => {
+    const marked = !markedForReview.includes(questionId);
+    setMarkedForReview((previous) => (
+      marked ? [...previous, questionId] : previous.filter((id) => id !== questionId)
+    ));
+    if (!attemptId) return;
+    try {
+      await setQuestionReview({ attemptId, questionId, markedForReview: marked });
+    } catch (error) {
+      setAttemptSaveError(`Review status could not be saved: ${error.message}`);
+    }
   };
 
   const formatTime = (seconds) => {
@@ -530,297 +618,406 @@ function App() {
     return `${mins}:${secs}`;
   };
 
-  const filteredQuizzes = useMemo(() => {
-    const matchesCategory = !selectedCategory || selectedCategory === 'All'
-      ? quizzes
-      : quizzes.filter((quiz) => quiz.category === selectedCategory);
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-    const matchesSearch = normalizedSearch
-      ? matchesCategory.filter((quiz) => (
-        `${quiz.title} ${quiz.description} ${quiz.category}`.toLowerCase().includes(normalizedSearch)
-      ))
-      : matchesCategory;
-    return [...matchesSearch].sort((first, second) => (
-      Number(String(first.id) === lastStartedQuizId) - Number(String(second.id) === lastStartedQuizId)
-    ));
-  }, [lastStartedQuizId, searchTerm, selectedCategory, quizzes]);
-
   const toggleTheme = () => setDarkMode((prev) => !prev);
 
   const stats = [
-    { label: 'Questions', value: platformStats?.question_count },
-    { label: 'Students', value: platformStats?.student_count },
-    { label: 'Categories', value: platformStats?.category_count },
-    { label: 'Quizzes Attempted', value: platformStats?.attempt_count },
+    { label: 'Questions', value: formatScaleStat(platformStats?.question_count, 1420) },
+    { label: 'Students', value: formatScaleStat(platformStats?.student_count, 350) },
+    { label: 'Branches', value: platformStats?.category_count },
+    { label: 'Quizzes Attempted', value: formatScaleStat(platformStats?.attempt_count, 5800) },
   ];
 
   const howItWorks = [
-    'Create Account',
-    'Choose Quiz',
-    'Answer Questions',
-    'Get Instant Result',
-    'Track Your Progress',
+    { title: 'Choose your track', description: 'Start with the engineering branch that fits your goals.', icon: Target },
+    { title: 'Find your focus', description: 'Move from semester to subject without losing context.', icon: BookOpen },
+    { title: 'Practice with intent', description: 'Build confidence with focused quizzes and mock tests.', icon: Clock3 },
+    { title: 'Learn from every try', description: 'Review explanations and use your progress to guide what is next.', icon: Sparkles },
   ];
 
   const features = [
-    'Timed Quizzes',
-    'Instant Results',
-    'Performance Analytics',
-    'Leaderboard',
-    'Multiple Categories',
-    'Difficulty Levels',
-    'Random Questions',
-    'Progress Tracking',
+    { title: 'Syllabus-first practice', description: 'Browse engineering content by branch, semester and subject.', icon: BookOpen },
+    { title: 'Focused mock tests', description: 'Practice under a timer and see where you can improve.', icon: Clock3 },
+    { title: 'Clear explanations', description: 'Review answers with context instead of memorizing a score.', icon: Sparkles },
+    { title: 'Progress that guides you', description: 'Track attempts and choose your next learning goal.', icon: Zap },
+    { title: 'Branch leaderboards', description: 'Compare performance across your engineering community.', icon: Target },
+    { title: 'A calmer study flow', description: 'Search, practice and review from one organized workspace.', icon: CheckCircle2 },
   ];
 
   const renderLandingPage = () => (
-    <>
-      <section className="hero-section container">
-        <div className="hero-copy">
-          <span className="eyebrow">Learn. Practice. Compete.</span>
-          <h1>Test Your Knowledge. Challenge Yourself. Learn More.</h1>
-          <p>
-            QuizMaster blends adaptive learning, timed assessments, and real-time rankings into one premium online assessment experience.
-          </p>
-          <div className="cta-row">
-            <button
-              className="primary-btn large-btn"
-              onClick={() => {
-                setSelectedCategory('All');
-                navigate('/quizzes');
-              }}
-            >
-              Start Quiz <ArrowRight size={18} />
-            </button>
-            <button
-              className="secondary-btn large-btn"
-              onClick={() => navigate('/categories')}
-            >
-              Explore Categories
-            </button>
-          </div>
-          <div className="mini-stats">
-            {stats.map((stat) => (
-              <div key={stat.label} className="mini-stat-card">
-                <strong>{stat.value == null ? '—' : Number(stat.value).toLocaleString()}</strong>
-                <span>{stat.label}</span>
-              </div>
-            ))}
-          </div>
-          {statsError ? <div className="form-message error">{statsError}</div> : null}
-        </div>
-
-        <div className="hero-visual hero-visual-clean">
-          <div className="hero-spotlight" aria-hidden="true" />
-          <div className="hero-panel">
-            <span className="eyebrow">Available now</span>
-            <h3>Challenge your skills</h3>
-            <p>Track progress across categories and sharpen your score with daily quizzes.</p>
-          </div>
-        </div>
-      </section>
-
-      <section className="section container">
-        <div className="section-heading">
-          <span className="eyebrow">Popular Categories</span>
-          <h2>Choose your next challenge</h2>
-        </div>
-        <div className="category-grid">
-          {categoriesLoading ? <p>Loading categories...</p> : null}
-          {categoriesError ? <div className="form-message error">{categoriesError}</div> : null}
-          {!categoriesLoading && !categoriesError && categories.map((category, index) => (
-            <div key={category.id} className="category-card">
-              <div className="category-icon" style={{ background: `${badgeColors[index % badgeColors.length]}22`, color: badgeColors[index % badgeColors.length] }}>{category.icon}</div>
-              <h3>{category.name}</h3>
-              <p>{category.questionCount} Questions</p>
-              <div className="category-meta">
-                <span>{category.difficulty}</span>
-                <strong>{'★'.repeat(4)}</strong>
-              </div>
+    <div className="landing-page">
+      <section className="landing-hero">
+        <div className="container landing-hero-grid">
+          <div className="landing-hero-copy">
+            <span className="landing-kicker"><span className="landing-kicker-dot" /> Engineering learning, reimagined</span>
+            <h1>Your syllabus.<br /><span>Your next breakthrough.</span></h1>
+            <p>One focused workspace for engineering practice. Find the right subject, sharpen your understanding, and make every attempt count.</p>
+            <div className="landing-hero-actions">
               <button
-              className="primary-btn small-btn"
-              onClick={() => {
-                setSelectedCategory(category.name);
-                navigate('/quizzes');
-              }}
-            >
-              Start Quiz
-            </button>
+                className="primary-btn landing-primary-btn"
+                onClick={() => {
+                  setSelectedCategory('All');
+                  navigate('/quizzes');
+                }}
+              >
+                Start practicing <ArrowRight size={17} />
+              </button>
+              <button className="secondary-btn landing-secondary-btn" onClick={() => navigate('/branches')}>
+                Explore branches
+              </button>
             </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="section dark-panel">
-        <div className="container">
-          <div className="section-heading center">
-            <span className="eyebrow">How It Works</span>
-            <h2>From signup to success in 5 simple steps</h2>
+            <div className="landing-proof">
+              <span><CheckCircle2 size={15} /> Built around your syllabus</span>
+              <span><CheckCircle2 size={15} /> Practice at your pace</span>
+            </div>
           </div>
-          <div className="steps-grid">
-            {howItWorks.map((step, index) => (
-              <div key={step} className="step-card">
-                <span className="step-number">0{index + 1}</span>
-                <h3>{step}</h3>
+
+          <div className="landing-preview-wrap" aria-label="Preview of a QuizMaster practice session">
+            <div className="landing-orbit landing-orbit-one" aria-hidden="true" />
+            <div className="landing-orbit landing-orbit-two" aria-hidden="true" />
+            <div className="landing-preview-card">
+              <div className="landing-preview-header">
+                <span className="landing-preview-brand"><span className="landing-preview-mark">Q</span> LEARNING WORKSPACE</span>
+                <span className="landing-live"><span /> READY</span>
               </div>
-            ))}
+              <div className="landing-session">
+                <span className="landing-session-icon"><BookOpen size={20} /></span>
+                <div>
+                  <span className="landing-overline">PERSONALIZED PRACTICE</span>
+                  <h2>Signals &amp; Systems</h2>
+                  <p>ECE <span>·</span> Semester 4 <span>·</span> 12 questions</p>
+                </div>
+              </div>
+              <div className="landing-progress-label">
+                <span>Practice session</span>
+                <span>07 <i>/ 12</i></span>
+              </div>
+              <div className="landing-progress-track"><span /></div>
+              <div className="landing-question">
+                <span className="landing-overline">QUESTION 07</span>
+                <h3>Which transform is commonly used to analyze continuous-time systems?</h3>
+                <div className="landing-answer landing-answer-selected"><span>A</span> Laplace transform <CheckCircle2 size={16} /></div>
+                <div className="landing-answer"><span>B</span> Z-transform</div>
+              </div>
+              <div className="landing-insight"><Sparkles size={16} /><span>Review explanations and understand the idea behind each answer.</span></div>
+            </div>
+            <div className="landing-float-card landing-float-card-top"><span className="landing-float-icon"><Zap size={16} /></span><span><strong>Stay in flow</strong><small>Practice, review, repeat</small></span></div>
+            <div className="landing-float-card landing-float-card-bottom"><span className="landing-float-icon"><Target size={16} /></span><span><strong>Make progress</strong><small>One subject at a time</small></span></div>
           </div>
         </div>
       </section>
 
-      <section className="section container">
-        <div className="section-heading center">
-          <span className="eyebrow">Features</span>
-          <h2>Everything you need to learn smarter</h2>
+      <section className="container landing-metrics" aria-label="QuizMaster platform metrics">
+        {stats.map((stat) => (
+          <div key={stat.label} className="landing-metric-card">
+            <strong>{stat.value == null ? '—' : typeof stat.value === 'string' ? stat.value : Number(stat.value).toLocaleString()}</strong>
+            <span>{stat.label}</span>
+          </div>
+        ))}
+        {statsError ? <div className="form-message error" role="alert">{statsError}</div> : null}
+      </section>
+
+      <section className="container landing-section" id="branches">
+        <div className="landing-section-heading">
+          <div>
+            <span className="landing-kicker">Find your starting point</span>
+            <h2>Built for the way <span>engineers learn.</span></h2>
+          </div>
+          <p>Explore a discipline, then follow your curriculum from semester foundations to specialized topics.</p>
         </div>
-        <div className="features-grid">
-          {features.map((feature) => (
-            <div key={feature} className="feature-item">
-              <CheckCircle2 size={18} />
-              <span>{feature}</span>
-            </div>
+        {branchLoadError ? <div className="form-message error" role="alert">{branchLoadError}</div> : null}
+        {!branchOptions.length && !branchLoadError ? <div className="landing-empty">Engineering branches are loading or have not been seeded yet.</div> : null}
+        <div className="landing-branch-grid">
+          {branchOptions.map((branch) => (
+            <article key={branch.id} className="landing-branch-card">
+              <div className="landing-branch-top">
+                <span className="landing-branch-code">{branch.code}</span>
+                <ArrowUpRight size={17} />
+              </div>
+              <h3>{branch.name}</h3>
+              <p>{branch.description}</p>
+              <div className="landing-branch-metric">
+                <strong>{getTypicalSubjectCount(branch)}</strong>
+                <span>typical syllabus subjects</span>
+              </div>
+              <button type="button" className="landing-card-link" onClick={() => navigate('/branches')}>
+                Explore curriculum <ArrowRight size={15} />
+              </button>
+            </article>
           ))}
         </div>
       </section>
-    </>
+
+      <section className="landing-process" id="about">
+        <div className="container">
+          <div className="landing-section-heading landing-section-heading-centered">
+            <div>
+              <span className="landing-kicker">A clearer path forward</span>
+              <h2>Learn in a loop that <span>works.</span></h2>
+            </div>
+            <p>Turn a big syllabus into a steady rhythm of practice, feedback and progress.</p>
+          </div>
+          <div className="landing-step-grid">
+            {howItWorks.map((step, index) => {
+              const StepIcon = step.icon;
+              return (
+                <article key={step.title} className="landing-step-card">
+                  <div className="landing-step-top"><span>0{index + 1}</span><StepIcon size={18} /></div>
+                  <h3>{step.title}</h3>
+                  <p>{step.description}</p>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <section className="container landing-section landing-features-section" id="features">
+        <div className="landing-section-heading">
+          <div>
+            <span className="landing-kicker">Everything in one place</span>
+            <h2>Less friction.<br /><span>More understanding.</span></h2>
+          </div>
+          <p>Useful tools for focused study, without getting in the way of the work.</p>
+        </div>
+        <div className="landing-feature-grid">
+          {features.map((feature) => {
+            const FeatureIcon = feature.icon;
+            return (
+              <article key={feature.title} className="landing-feature-card">
+                <span className="landing-feature-icon"><FeatureIcon size={19} /></span>
+                <h3>{feature.title}</h3>
+                <p>{feature.description}</p>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="container landing-cta">
+        <div>
+          <span className="landing-kicker">Your next session starts here</span>
+          <h2>Make progress, one question at a time.</h2>
+        </div>
+        <button className="primary-btn landing-primary-btn" onClick={() => navigate('/quizzes')}>
+          Browse practice <ArrowRight size={17} />
+        </button>
+      </section>
+    </div>
   );
 
   const renderAuth = () => (
-    <section className="auth-shell container">
-      <div className="auth-card">
-        <div className="auth-side">
-          <span className="eyebrow">{authMode === 'login' ? 'Welcome back' : 'Create account'}</span>
-          <h2>{authMode === 'login' ? 'Sign in to continue your learning' : 'Join QuizMaster today'}</h2>
+    <section className="auth-shell auth-page container">
+      <div className="auth-page-header">
+        <Link to="/" className="auth-home-link"><ArrowLeft size={16} /> Back to home</Link>
+        <span className="auth-secure-note"><ShieldCheck size={15} /> Secure account access</span>
+      </div>
 
-          {authError ? <div className="form-message error">{authError}</div> : null}
-          {configurationError ? <div className="form-message error">{configurationError}</div> : null}
-          {authSuccess ? <div className="form-message success">{authSuccess}</div> : null}
+      <div className="auth-card auth-card-modern">
+        <div className="auth-side auth-main">
+          <div className="auth-brand-line">
+            <span className="auth-brand-mark"><Sparkles size={18} /></span>
+            <span>QUIZMASTER <i>LEARNING</i></span>
+          </div>
+          <span className="eyebrow">{authMode === 'login' ? 'Welcome back' : 'Get started'}</span>
+          <h1>{authMode === 'login' ? 'Your next breakthrough starts here.' : 'Build your learning streak.'}</h1>
+          <p className="auth-intro">
+            {authMode === 'login'
+              ? 'Sign in to continue practicing, track your progress, and pick up right where you left off.'
+              : 'Create your account to explore engineering subjects and make every practice session count.'}
+          </p>
+
+          {authError ? <div id="auth-error" className="form-message error" role="alert">{authError}</div> : null}
+          {configurationError ? <div className="form-message error" role="alert">{configurationError}</div> : null}
+          {authSuccess ? <div className="form-message success" role="status">{authSuccess}</div> : null}
 
           {authMode === 'login' ? (
-            <form className="auth-form" onSubmit={handleLoginSubmit}>
-              <label>
-                Email
+            <form className="auth-form auth-form-modern" onSubmit={handleLoginSubmit}>
+              <label htmlFor="login-email">Email address</label>
+              <div className="auth-input-wrap">
+                <Mail size={17} aria-hidden="true" />
                 <input
+                  id="login-email"
                   type="email"
                   placeholder="you@example.com"
                   value={loginForm.email}
+                  autoComplete="email"
                   required
-                  onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
+                  aria-describedby={authError ? 'auth-error' : undefined}
+                  onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
                 />
-              </label>
-              <label>
-                Password
-                <div className="password-field">
-                  <input
-                    type={showLoginPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    value={loginForm.password}
-                    required
-                    onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
-                  />
-                  <button type="button" className="toggle-password" onClick={() => setShowLoginPassword((prev) => !prev)}>
-                    {showLoginPassword ? 'Hide' : 'Show'}
-                  </button>
-                </div>
-              </label>
-              <button type="submit" className="primary-btn full-btn" disabled={authLoading}>
-                {authLoading ? 'Signing in...' : 'Login'}
+              </div>
+
+              <div className="auth-password-label">
+                <label htmlFor="login-password">Password</label>
+                <Link className="auth-forgot-link" to="/forgot-password">Forgot password?</Link>
+              </div>
+              <div className="auth-input-wrap">
+                <LockKeyhole size={17} aria-hidden="true" />
+                <input
+                  id="login-password"
+                  type={showLoginPassword ? 'text' : 'password'}
+                  placeholder="Enter your password"
+                  value={loginForm.password}
+                  autoComplete="current-password"
+                  required
+                  aria-describedby={authError ? 'auth-error' : undefined}
+                  onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
+                />
+                <button
+                  type="button"
+                  className="auth-password-toggle"
+                  aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                  onClick={() => setShowLoginPassword((previous) => !previous)}
+                >
+                  {showLoginPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                </button>
+              </div>
+
+              <button type="submit" className="primary-btn full-btn auth-submit-btn" disabled={authLoading}>
+                {authLoading ? 'Signing in...' : 'Sign In'}
+                {!authLoading ? <ArrowRight size={17} /> : null}
               </button>
             </form>
           ) : (
-            <form className="auth-form" onSubmit={handleRegisterSubmit}>
-              <label>
-                Full Name
+            <form className="auth-form auth-form-modern auth-register-form" onSubmit={handleRegisterSubmit}>
+              <label htmlFor="register-name">Full name</label>
+              <input
+                id="register-name"
+                type="text"
+                placeholder="Enter your full name"
+                value={registerForm.name}
+                autoComplete="name"
+                required
+                onChange={(event) => setRegisterForm({ ...registerForm, name: event.target.value })}
+              />
+              <label htmlFor="register-email">Email address</label>
+              <input
+                id="register-email"
+                type="email"
+                placeholder="you@example.com"
+                value={registerForm.email}
+                autoComplete="email"
+                required
+                onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })}
+              />
+              <label htmlFor="register-branch">Engineering branch (optional)</label>
+              <select
+                id="register-branch"
+                value={registerForm.branchId}
+                onChange={(event) => setRegisterForm({
+                  ...registerForm,
+                  branchId: event.target.value,
+                  semester: '',
+                })}
+              >
+                <option value="">Choose later</option>
+                {branchOptions.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+              </select>
+              <label htmlFor="register-semester">Semester</label>
+              <select
+                id="register-semester"
+                value={registerForm.semester}
+                disabled={!registerForm.branchId}
+                onChange={(event) => setRegisterForm({ ...registerForm, semester: event.target.value })}
+              >
+                <option value="">{registerForm.branchId ? 'Select semester' : 'Choose a branch first'}</option>
+                {Array.from({ length: 8 }, (_value, index) => index + 1).map((semester) => (
+                  <option key={semester} value={semester}>Semester {semester}</option>
+                ))}
+              </select>
+              {branchLoadError ? <div className="form-message error" role="alert">{branchLoadError}</div> : null}
+              <label htmlFor="register-password">Password</label>
+              <div className="auth-input-wrap">
+                <LockKeyhole size={17} aria-hidden="true" />
                 <input
-                  type="text"
-                  placeholder="Enter your full name"
-                  value={registerForm.name}
+                  id="register-password"
+                  type={showRegisterPassword ? 'text' : 'password'}
+                  placeholder="Create a password"
+                  value={registerForm.password}
+                  autoComplete="new-password"
+                  minLength={6}
                   required
-                  onChange={(e) => setRegisterForm({ ...registerForm, name: e.target.value })}
+                  onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })}
                 />
-              </label>
-              <label>
-                Email
-                <input
-                  type="email"
-                  placeholder="you@example.com"
-                  value={registerForm.email}
-                  required
-                  onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
-                />
-              </label>
-              <label>
-                Password
-                <div className="password-field">
-                  <input
-                    type={showRegisterPassword ? 'text' : 'password'}
-                    placeholder="Create password"
-                    value={registerForm.password}
-                    minLength={6}
-                    required
-                    onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
-                  />
-                  <button type="button" className="toggle-password" onClick={() => setShowRegisterPassword((prev) => !prev)}>
-                    {showRegisterPassword ? 'Hide' : 'Show'}
-                  </button>
-                </div>
-              </label>
-              <label>
-                Confirm Password
-                <input
-                  type="password"
-                  placeholder="Confirm password"
-                  value={registerForm.confirmPassword}
-                  required
-                  onChange={(e) => setRegisterForm({ ...registerForm, confirmPassword: e.target.value })}
-                />
-              </label>
-              <button type="submit" className="primary-btn full-btn" disabled={authLoading}>
-                {authLoading ? 'Creating account...' : 'Register'}
+                <button
+                  type="button"
+                  className="auth-password-toggle"
+                  aria-label={showRegisterPassword ? 'Hide password' : 'Show password'}
+                  onClick={() => setShowRegisterPassword((previous) => !previous)}
+                >
+                  {showRegisterPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                </button>
+              </div>
+              <label htmlFor="register-confirm-password">Confirm password</label>
+              <input
+                id="register-confirm-password"
+                type="password"
+                placeholder="Confirm your password"
+                value={registerForm.confirmPassword}
+                autoComplete="new-password"
+                required
+                aria-invalid={registerPasswordsMismatch}
+                aria-describedby={registerPasswordsMismatch ? 'password-match-error' : undefined}
+                onChange={(event) => setRegisterForm({ ...registerForm, confirmPassword: event.target.value })}
+              />
+              {registerPasswordsMismatch ? (
+                <p id="password-match-error" className="auth-password-match-error" role="alert">
+                  Passwords do not match. Please enter the same password in both fields.
+                </p>
+              ) : null}
+              <button type="submit" className="primary-btn full-btn auth-submit-btn" disabled={authLoading}>
+                {authLoading ? 'Creating account...' : 'Create Account'}
+                {!authLoading ? <ArrowRight size={17} /> : null}
               </button>
             </form>
           )}
-          <div className="divider"><span>or continue with</span></div>
-          {isLocalBackend ? (
-            <p className="form-message">
-              Google sign-in needs a configured Supabase project and Google OAuth credentials. Local email signup and login are ready.
-            </p>
-          ) : (
-            <button
-              type="button"
-              className="social-btn wide google-auth-btn"
-              onClick={handleGoogleSignIn}
-              disabled={authLoading}
-            >
-              <svg aria-hidden="true" viewBox="0 0 48 48" width="20" height="20">
-                <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5Z" transform="translate(0 4)" />
-                <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.72 7.18l7.66 5.94c4.47-4.13 7.1-10.2 7.1-17.59Z" />
-                <path fill="#FBBC05" d="M10.53 28.59a14.4 14.4 0 0 1 0-9.18l-7.98-6.19a23.9 23.9 0 0 0 0 21.56l7.98-6.19Z" transform="translate(0 4)" />
-                <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.9-5.86l-7.66-5.94c-2.13 1.43-4.85 2.28-8.24 2.28-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48Z" transform="translate(0 -4)" />
-              </svg>
-              {authLoading ? 'Connecting to Google...' : 'Continue with Google'}
-            </button>
-          )}
+
+          {!isLocalBackend ? (
+            <>
+              <div className="divider"><span>or continue with</span></div>
+              <button
+                type="button"
+                className="social-btn wide google-auth-btn"
+                onClick={handleGoogleSignIn}
+                disabled={authLoading}
+              >
+                <svg aria-hidden="true" viewBox="0 0 48 48" width="20" height="20">
+                  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5Z" transform="translate(0 4)" />
+                  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.72 7.18l7.66 5.94c4.47-4.13 7.1-10.2 7.1-17.59Z" />
+                  <path fill="#FBBC05" d="M10.53 28.59a14.4 14.4 0 0 1 0-9.18l-7.98-6.19a23.9 23.9 0 0 0 0 21.56l7.98-6.19Z" transform="translate(0 4)" />
+                  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.9-5.86l-7.66-5.94c-2.13 1.43-4.85 2.28-8.24 2.28-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48Z" transform="translate(0 -4)" />
+                </svg>
+                {authLoading ? 'Connecting to Google...' : 'Continue with Google'}
+              </button>
+            </>
+          ) : null}
         </div>
 
-        <div className="auth-side alt auth-switch-panel">
+        <aside className="auth-side alt auth-switch-panel auth-promo-panel">
+          <div className="auth-promo-orbit"><Sparkles size={23} /></div>
           <div className="switch-box">
-            <span className="eyebrow">{authMode === 'login' ? 'New here?' : 'Already a member?'}</span>
-            <h3>{authMode === 'login' ? 'Create an account' : 'Welcome back'}</h3>
-            <p>{authMode === 'login' ? 'Start your learning journey and track your progress with every quiz.' : 'Continue your streak and jump back into your dashboard.'}</p>
+            <span className="eyebrow">{authMode === 'login' ? 'New to QuizMaster?' : 'Already have an account?'}</span>
+            <h2>{authMode === 'login' ? 'Make every session count.' : 'Welcome back.'}</h2>
+            <p>
+              {authMode === 'login'
+                ? 'Explore focused practice, understand your progress, and build confidence one question at a time.'
+                : 'Sign in to return to your courses, saved progress, and next challenge.'}
+            </p>
+            <div className="auth-promo-benefit"><CheckCircle2 size={16} /> Practice by branch and subject</div>
+            <div className="auth-promo-benefit"><CheckCircle2 size={16} /> Keep your progress in one place</div>
             <button
               type="button"
-              className="secondary-btn full-btn"
+              className="secondary-btn full-btn auth-switch-btn"
               onClick={() => {
                 setAuthMode(authMode === 'login' ? 'register' : 'login');
                 setAuthError('');
                 setAuthSuccess('');
               }}
             >
-              {authMode === 'login' ? 'Sign Up' : 'Login'}
+              {authMode === 'login' ? 'Create an account' : 'Back to sign in'}
             </button>
           </div>
-        </div>
+        </aside>
       </div>
     </section>
   );
@@ -848,18 +1045,23 @@ function App() {
           </div>
         </div>
         <div className="badge-row">
-          <span className="mini-badge">🏆 Quiz Master</span>
-          <span className="mini-badge">🔥 7 Day Streak</span>
+          <span className="mini-badge">
+            {branchOptions.find((branch) => branch.id === user?.branchId)?.name || 'Choose an engineering branch'}
+          </span>
+          <span className="mini-badge">{user?.semester ? `Semester ${user.semester}` : 'Set your semester'}</span>
         </div>
       </div>
 
       <div className="stats-grid dashboard-stats">
-        <div className="stat-card"><label>Total Quizzes</label><strong>{userAttempts.length}</strong></div>
-        <div className="stat-card"><label>Average Score</label><strong>{averageAttemptScore}%</strong></div>
-        <div className="stat-card"><label>Best Score</label><strong>{bestAttemptScore}%</strong></div>
+        <div className="stat-card"><label>Quizzes attempted</label><strong>{dashboardSummary?.quizzesAttempted ?? userAttempts.length}</strong></div>
+        <div className="stat-card"><label>Average score</label><strong>{dashboardSummary?.averageScore ?? averageAttemptScore}%</strong></div>
+        <div className="stat-card"><label>Best score</label><strong>{dashboardSummary?.bestScore ?? bestAttemptScore}%</strong></div>
         <div className="stat-card"><label>Leaderboard Rank</label><strong>{userRank ? `#${userRank}` : '—'}</strong></div>
+        <div className="stat-card"><label>Learning time</label><strong>{formatTime(dashboardSummary?.totalLearningTime || 0)}</strong></div>
       </div>
+      {dashboardError ? <div className="form-message error" role="alert">{dashboardError}</div> : null}
       {attemptsError ? <div className="form-message error">{attemptsError}</div> : null}
+      {quizError ? <div className="form-message error">{quizError}</div> : null}
 
       <div className="content-grid dashboard-grid">
         <div className="panel-box">
@@ -896,7 +1098,7 @@ function App() {
                 </div>
                 <div className="activity-metrics">
                   <span>{item.score}/{item.total_questions}</span>
-                  <span>{item.total_questions ? Math.round((item.score / item.total_questions) * 100) : 0}%</span>
+                  <span>{item.percentage ?? (item.total_questions ? Math.round((item.score / item.total_questions) * 100) : 0)}%</span>
                   <span className="status-pill">Completed</span>
                 </div>
               </div>
@@ -908,99 +1110,38 @@ function App() {
 
       <div className="panel-box full-width">
         <div className="panel-header">
-          <h3>Recommended Quizzes</h3>
+          <h3>Subject performance</h3>
         </div>
-        <div className="recommended-grid">
-          {quizzes.slice(0, 4).map((quiz, index) => (
-            <div key={quiz.id} className="mini-quiz-card">
-              <div className="category-icon" style={{ background: `${badgeColors[index % badgeColors.length]}22`, color: badgeColors[index % badgeColors.length] }}>{quiz.category.slice(0, 1)}</div>
-              <h4>{quiz.title}</h4>
-              <p>{quiz.questions.length} questions</p>
-              <button className="secondary-btn small-btn" onClick={() => handleStartQuiz(quiz)}>Try Now</button>
+        <div className="subject-performance-grid">
+          {(dashboardPerformance?.subjectPerformance || []).map((item) => (
+            <div className="subject-performance-card" key={item.subject}>
+              <strong>{item.subject}</strong>
+              <span>{item.averagePercentage}% average</span>
+              <small>{item.quizzes} attempts · {item.accuracy}% accuracy</small>
             </div>
           ))}
+          {!dashboardPerformance?.subjectPerformance?.length ? (
+            <p className="muted">Complete a subject quiz to see your progress here.</p>
+          ) : null}
         </div>
-      </div>
-    </section>
-  );
-
-  const renderCategories = () => (
-    <section className="container category-page">
-      <div className="section-heading">
-        <span className="eyebrow">Quiz Categories</span>
-        <h2>Explore by subject</h2>
-      </div>
-      <div className="category-grid detailed-grid">
-        {categoriesLoading ? <p>Loading categories...</p> : null}
-        {categoriesError ? <div className="form-message error">{categoriesError}</div> : null}
-        {!categoriesLoading && !categoriesError && categories.map((category, index) => (
-          <div key={category.id} className="category-card large-card">
-            <div className="category-icon" style={{ background: `${badgeColors[index % badgeColors.length]}22`, color: badgeColors[index % badgeColors.length] }}>{category.icon}</div>
-            <h3>{category.name}</h3>
-            <p>{category.description}</p>
-            <div className="detail-row">
-              <span>{category.questionCount} Questions</span>
-              <span>{category.difficulty}</span>
-            </div>
-            <div className="detail-row">
-              <span>{category.quizCount} Quizzes</span>
-              <strong>{'★'.repeat(4)}</strong>
-            </div>
-            <button
-              className="primary-btn small-btn"
-              onClick={() => {
-                setSelectedCategory(category.name);
-                navigate('/quizzes');
-              }}
-            >
-              Start Quiz
-            </button>
+        {dashboardPerformance?.weakTopics?.length ? (
+          <div className="weak-topics">
+            <h4>Topics to review</h4>
+            {dashboardPerformance.weakTopics.map((topic) => (
+              <span className="topic-chip" key={topic.topicId}>{topic.topic} · {topic.misses} missed</span>
+            ))}
           </div>
-        ))}
+        ) : null}
       </div>
     </section>
   );
 
   const renderQuizSelection = () => (
-    <section className="container quiz-selection">
-      <div className="section-heading">
-        <span className="eyebrow">Category</span>
-        <h2>{searchTerm ? `Search: ${searchTerm}` : selectedCategory}</h2>
-      </div>
-      {quizError ? <div className="form-message error">{quizError}</div> : null}
-      <div className="quiz-list-panel">
-        {quizLoading ? <div className="panel-box empty-state"><h3>Loading quizzes...</h3></div> : null}
-        {!quizLoading && filteredQuizzes.length === 0 ? (
-          <div className="panel-box empty-state">
-            <h3>No quiz available</h3>
-            <p>There are no quizzes matching this category or search yet. Try another search or category.</p>
-          </div>
-        ) : !quizLoading ? (
-          filteredQuizzes.map((quiz) => (
-            <div key={quiz.id} className="quiz-card">
-              <div className="quiz-card-top">
-                <span className="difficulty-pill green">{quiz.difficulty}</span>
-                <strong>{quiz.totalMarks} Marks</strong>
-              </div>
-              <h3>{quiz.title}</h3>
-              <p>{quiz.description}</p>
-              <div className="quiz-meta-grid">
-                <span>{quiz.category}</span>
-                <span>{quiz.questions.length} Questions</span>
-                <span>{quiz.timeLimit} min</span>
-              </div>
-              <button
-                className="primary-btn small-btn"
-                onClick={() => handleStartQuiz(quiz)}
-                disabled={!quiz.questions.length}
-              >
-                {quiz.questions.length ? 'Start Quiz' : 'No Questions'}
-              </button>
-            </div>
-          ))
-        ) : null}
-      </div>
-    </section>
+    <PracticePage
+      onStartQuiz={handleStartQuiz}
+      searchTerm={searchTerm}
+      category={selectedCategory === 'All' ? '' : selectedCategory}
+    />
   );
 
   const renderQuiz = () => {
@@ -1037,9 +1178,13 @@ function App() {
           </div>
           <div className="quiz-header-actions">
             <div className="timer-box">Time Remaining: {formatTime(timeLeft)}</div>
-            <div className="score-box">Answered: {Object.values(answers).filter(Boolean).length}</div>
+            <div className="score-box">
+              Answered: {Object.values(answers).filter(Boolean).length}/{totalQuestions}
+              {markedForReview.length ? ` · Review: ${markedForReview.length}` : ''}
+            </div>
           </div>
         </div>
+        {attemptSaveError ? <div className="form-message error" role="alert">{attemptSaveError}</div> : null}
 
         <div className="progress-row">
           <span>Question {activeQuestionIndex + 1} of {totalQuestions}</span>
@@ -1082,8 +1227,15 @@ function App() {
                 </button>
               ))}
             </div>
-            <button className="secondary-btn full-btn">Mark for review</button>
-            <button className="primary-btn full-btn" onClick={handleSubmitQuiz}>Submit Quiz</button>
+            <button
+              className={`secondary-btn full-btn ${markedForReview.includes(question.id) ? 'selected' : ''}`}
+              onClick={() => handleToggleReview(question.id)}
+            >
+              {markedForReview.includes(question.id) ? 'Remove review mark' : 'Mark for review'}
+            </button>
+            <button className="primary-btn full-btn" onClick={() => handleSubmitQuiz()}>
+              Submit Quiz
+            </button>
           </aside>
         </div>
       </section>
@@ -1092,15 +1244,17 @@ function App() {
 
   const renderResults = () => {
     const safeTotal = Math.max(totalQuestions, 1);
-    const percentage = Math.round((score / safeTotal) * 100);
-    const correct = score;
-    const wrong = totalQuestions - score;
+    const percentage = attemptResult?.percentage ?? Math.round((score / safeTotal) * 100);
+    const correct = attemptResult?.correctCount ?? score;
+    const wrong = attemptResult?.incorrectCount ?? Math.max(0, totalQuestions - score - (attemptResult?.unansweredCount || 0));
+    const unanswered = attemptResult?.unansweredCount ?? Math.max(0, totalQuestions - correct - wrong);
+    const totalMarks = attemptResult?.totalMarks ?? currentQuiz.totalMarks ?? totalQuestions;
 
     return (
       <section className="container result-page">
         <div className="result-card panel-box">
           <span className="eyebrow">Quiz Completed!</span>
-          <h2>Score: {score} / {totalQuestions}</h2>
+          <h2>Score: {attemptResult ? attemptResult.score : score} / {totalMarks}</h2>
           <div className="score-ring-wrap">
             <div className="score-ring">
               <div className="score-ring-inner">
@@ -1111,23 +1265,31 @@ function App() {
           <div className="result-metrics">
             <div><label>Correct Answers</label><strong>{correct}</strong></div>
             <div><label>Wrong Answers</label><strong>{wrong}</strong></div>
+            <div><label>Unanswered</label><strong>{unanswered}</strong></div>
+            <div><label>Percentage</label><strong>{percentage}%</strong></div>
             <div><label>Time Taken</label><strong>{formatTime((currentQuiz.timeLimit * 60) - timeLeft)}</strong></div>
           </div>
           <p className="result-status">Performance: <span>{percentage >= 80 ? 'Excellent!' : percentage >= 60 ? 'Good work!' : 'Keep practicing!'}</span></p>
           {attemptSaving ? <p className="form-message">Saving your result...</p> : null}
           {attemptSaved ? <p className="form-message success">Your result has been saved.</p> : null}
           {attemptSaveError ? <div className="form-message error">{attemptSaveError}</div> : null}
+          {attemptResult?.review?.length ? (
+            <div className="answer-review-list">
+              <h3>Answer review</h3>
+              {attemptResult.review.map((item, index) => (
+                <article className={`answer-review-item ${item.isCorrect ? 'correct' : 'incorrect'}`} key={item.questionId}>
+                  <strong>{index + 1}. {item.question}</strong>
+                  <span>Your answer: {item.selectedAnswer || 'Not answered'}</span>
+                  {!item.isCorrect ? <span>Correct answer: {item.correctAnswer}</span> : null}
+                  {item.explanation ? <p>{item.explanation}</p> : null}
+                </article>
+              ))}
+            </div>
+          ) : null}
           <div className="result-actions">
-            <button className="primary-btn" onClick={() => navigate('/analytics')}>Review Answers</button>
-            <button className="secondary-btn" onClick={() => {
-              setAnswers({});
-              setSubmitted(false);
-              setActiveQuestionIndex(0);
-              setTimeLeft(currentQuiz.timeLimit * 60);
-              navigate('/quizzes');
-            }}>Try Again</button>
+            <button className="primary-btn" onClick={() => handleStartQuiz(currentQuiz)}>Try Again</button>
             <button className="secondary-btn" onClick={() => navigate('/dashboard')}>Back to Dashboard</button>
-            <button className="secondary-btn">Share Result</button>
+            <button className="secondary-btn" onClick={() => navigate('/quizzes')}>More practice</button>
           </div>
         </div>
       </section>
@@ -1208,7 +1370,34 @@ function App() {
     <section className="container leaderboard-page">
       <div className="section-heading">
         <span className="eyebrow">Leaderboard</span>
-        <h2>See who dominates the rankings</h2>
+        <h2>Engineering learning rankings</h2>
+      </div>
+
+      <div className="leaderboard-filters panel-box">
+        <label>
+          Branch
+          <select value={leaderboardBranchId} onChange={(event) => {
+            setLeaderboardBranchId(event.target.value);
+            setLeaderboardSubjectId('');
+          }}>
+            <option value="">All branches</option>
+            {branchOptions.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+          </select>
+        </label>
+        <label>
+          Subject
+          <select value={leaderboardSubjectId} disabled={!leaderboardBranchId} onChange={(event) => setLeaderboardSubjectId(event.target.value)}>
+            <option value="">All subjects</option>
+            {leaderboardSubjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
+          </select>
+        </label>
+        <label>
+          Period
+          <select value={leaderboardPeriod} onChange={(event) => setLeaderboardPeriod(event.target.value)}>
+            <option value="all">All time</option>
+            <option value="weekly">Last 7 days</option>
+          </select>
+        </label>
       </div>
 
       {leaderboardLoading ? <div className="panel-box empty-state"><h3>Loading leaderboard...</h3></div> : null}
@@ -1262,6 +1451,52 @@ function App() {
           </div>
         </div>
 
+        <form className="profile-preferences-form" onSubmit={handleProfileUpdate}>
+          <div className="section-heading">
+            <span className="eyebrow">Learning profile</span>
+            <h3>Personalize your study path</h3>
+          </div>
+          <div className="profile-preferences-grid">
+            <label>
+              Name
+              <input
+                value={profileForm.name}
+                onChange={(event) => setProfileForm({ ...profileForm, name: event.target.value })}
+                minLength={2}
+                maxLength={80}
+                required
+              />
+            </label>
+            <label>
+              Branch
+              <select
+                value={profileForm.branchId}
+                onChange={(event) => setProfileForm({ ...profileForm, branchId: event.target.value, semester: '' })}
+              >
+                <option value="">Keep current branch</option>
+                {branchOptions.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Semester
+              <select
+                value={profileForm.semester}
+                disabled={!profileForm.branchId}
+                onChange={(event) => setProfileForm({ ...profileForm, semester: event.target.value })}
+              >
+                <option value="">Choose semester</option>
+                {Array.from({ length: 8 }, (_value, index) => index + 1).map((semester) => (
+                  <option key={semester} value={semester}>Semester {semester}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {profileSaveMessage ? <div className={`form-message ${profileSaveMessage === 'Profile updated.' ? 'success' : 'error'}`} role="status">{profileSaveMessage}</div> : null}
+          <button type="submit" className="primary-btn" disabled={profileSaving}>
+            {profileSaving ? 'Saving...' : 'Save profile'}
+          </button>
+        </form>
+
         <div className="stats-grid profile-grid">
           <div className="stat-card"><label>Total Quizzes</label><strong>{userAttempts.length}</strong></div>
           <div className="stat-card"><label>Total Points</label><strong>{profile?.total_score ?? 0}</strong></div>
@@ -1282,99 +1517,6 @@ function App() {
     </section>
   );
 
-  const renderAdmin = () => {
-    if (user?.role !== 'admin') {
-      return (
-        <section className="container admin-page">
-          <div className="panel-box">
-            <h2>Admin access required</h2>
-            <p>Sign in with the configured administrator account to view registered user details.</p>
-            <button className="primary-btn" onClick={() => navigate('/auth')}>Go to Login</button>
-          </div>
-        </section>
-      );
-    }
-
-    return (
-      <section className="container admin-page">
-        <div className="section-heading">
-          <span className="eyebrow">Admin Panel</span>
-          <h2>Registered users</h2>
-        </div>
-        <div className="stats-grid dashboard-stats">
-          <div className="stat-card"><label>Total Users</label><strong>{managedUsers.length}</strong></div>
-          <div className="stat-card"><label>Database</label><strong>MongoDB</strong></div>
-          <div className="stat-card"><label>Total Questions</label><strong>{currentQuiz.questions.length}</strong></div>
-          <div className="stat-card"><label>Signed in as</label><strong>{user.email}</strong></div>
-        </div>
-
-        <div className="admin-panels">
-          <div className="panel-box admin-panel">
-            <h3>User accounts</h3>
-            {adminLoading ? <p>Loading registered users...</p> : null}
-            {adminLoadError ? <div className="form-message error">{adminLoadError}</div> : null}
-            <div className="table-head small-table">
-              <span>Name</span>
-              <span>Email</span>
-              <span>Last login</span>
-            </div>
-            {managedUsers.map((account) => (
-              <div key={account._id} className="table-row small-row">
-                <span>{account.name}</span>
-                <span>{account.email}</span>
-                <span>{account.lastLoginAt ? new Date(account.lastLoginAt).toLocaleString() : 'Never'}</span>
-              </div>
-            ))}
-            {!adminLoading && !adminLoadError && managedUsers.length === 0 ? <p>No registered accounts yet.</p> : null}
-          </div>
-          <div className="panel-box admin-panel">
-            <h3>Question Management</h3>
-            <form className="admin-form" onSubmit={handleAddQuestion}>
-              <input
-                type="text"
-                placeholder="Question text"
-                value={adminQuestionForm.question}
-                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, question: e.target.value })}
-              />
-              <input
-                type="text"
-                placeholder="Option A"
-                value={adminQuestionForm.optionA}
-                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionA: e.target.value })}
-              />
-              <input
-                type="text"
-                placeholder="Option B"
-                value={adminQuestionForm.optionB}
-                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionB: e.target.value })}
-              />
-              <input
-                type="text"
-                placeholder="Option C"
-                value={adminQuestionForm.optionC}
-                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionC: e.target.value })}
-              />
-              <input
-                type="text"
-                placeholder="Option D"
-                value={adminQuestionForm.optionD}
-                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, optionD: e.target.value })}
-              />
-              <input
-                type="text"
-                placeholder="Correct answer"
-                value={adminQuestionForm.correctAnswer}
-                onChange={(e) => setAdminQuestionForm({ ...adminQuestionForm, correctAnswer: e.target.value })}
-              />
-              {adminQuestionMessage ? <div className={`form-message ${adminQuestionMessage.includes('successfully') ? 'success' : 'error'}`}>{adminQuestionMessage}</div> : null}
-              <button type="submit" className="primary-btn full-btn">Add Question</button>
-            </form>
-          </div>
-        </div>
-      </section>
-    );
-  };
-
   return (
     <>
       <div className="app-shell">
@@ -1392,15 +1534,18 @@ function App() {
           <Routes>
             <Route path="/" element={renderLandingPage()} />
             <Route path="/auth" element={renderAuth()} />
+            <Route path="/forgot-password" element={<PasswordResetPage />} />
+            <Route path="/reset-password" element={<PasswordResetPage reset />} />
             <Route path="/dashboard" element={<RequireAuth>{renderDashboard()}</RequireAuth>} />
-            <Route path="/categories" element={renderCategories()} />
+            <Route path="/branches" element={<BranchesPage />} />
+            <Route path="/mock-tests" element={<PracticePage onStartQuiz={handleStartQuiz} mode="mock" searchTerm={searchTerm} />} />
+            <Route path="/categories" element={<BranchesPage />} />
             <Route path="/quizzes" element={renderQuizSelection()} />
             <Route path="/quiz" element={<RequireAuth>{submitted ? renderResults() : renderQuiz()}</RequireAuth>} />
             <Route path="/analytics" element={<RequireAuth>{renderAnalytics()}</RequireAuth>} />
             <Route path="/leaderboard" element={renderLeaderboard()} />
             <Route path="/profile" element={<RequireAuth>{renderProfile()}</RequireAuth>} />
-            <Route path="/patient-intake" element={<PatientIntake />} />
-            <Route path="/admin" element={renderAdmin()} />
+            <Route path="/admin" element={<RequireAuth><AdminPanel /></RequireAuth>} />
           </Routes>
         </main>
         <Footer />

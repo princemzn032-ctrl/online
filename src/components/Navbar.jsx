@@ -1,5 +1,5 @@
-import { Bell, Search, Moon, Sun, User, LogOut, Sparkles } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { ArrowRight, Search, Moon, Sun, User, LogOut, Sparkles } from 'lucide-react';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
 export default function Navbar({
   darkMode,
@@ -12,42 +12,41 @@ export default function Navbar({
   onAuthModeChange,
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const isLoggedIn = Boolean(user);
 
   return (
-    <header className="topbar">
-      <nav className="nav container">
-        <div className="brand-wrap">
+    <header className="topbar topbar-modern">
+      <nav className="nav nav-modern container" aria-label="Main navigation">
+        <Link className="brand-wrap nav-brand" to="/" aria-label="QuizMaster home">
           <div className="brand-mark">Q</div>
           <div>
             <span className="brand-name">QuizMaster</span>
           </div>
-        </div>
+        </Link>
+
+        <form className="search-box nav-search" onSubmit={(event) => { event.preventDefault(); onSearchSubmit?.(); }}>
+          <Search size={16} />
+          <input
+            type="search"
+            placeholder="Search quizzes..."
+            value={searchTerm}
+            onChange={(event) => onSearchChange?.(event.target.value)}
+            aria-label="Search quizzes"
+          />
+          <span className="search-shortcut" aria-hidden="true"><ArrowRight size={13} /></span>
+        </form>
 
         <div className="nav-links">
-          <a href="/" onClick={(event) => { event.preventDefault(); navigate('/'); }}>Home</a>
-          <a href="/quizzes" onClick={(event) => { event.preventDefault(); navigate('/quizzes'); }}>Quizzes</a>
-          <a href="/categories" onClick={(event) => { event.preventDefault(); navigate('/categories'); }}>Categories</a>
-          <a href="/leaderboard" onClick={(event) => { event.preventDefault(); navigate('/leaderboard'); }}>Leaderboard</a>
-          <a href="/patient-intake" onClick={(event) => { event.preventDefault(); navigate('/patient-intake'); }}>Patient Intake</a>
-          <a href="/auth" onClick={(event) => { event.preventDefault(); navigate('/auth'); }}>How It Works</a>
+          <NavLink to="/" end className={({ isActive }) => (isActive && !location.hash ? 'active' : undefined)}>Home</NavLink>
+          <NavLink to="/branches">Branches</NavLink>
+          <NavLink to="/quizzes">Practice</NavLink>
+          <NavLink to="/mock-tests">Mock Tests</NavLink>
+          <NavLink to="/leaderboard">Leaderboard</NavLink>
+          <Link to="/#about" className={location.hash === '#about' ? 'active' : undefined}>About</Link>
         </div>
 
         <div className="nav-actions">
-          <form className="search-box" onSubmit={(event) => { event.preventDefault(); onSearchSubmit?.(); }}>
-            <Search size={16} />
-            <input
-              type="search"
-              placeholder="Search quizzes"
-              value={searchTerm}
-              onChange={(event) => onSearchChange?.(event.target.value)}
-              aria-label="Search quizzes"
-            />
-          </form>
-          <button className="icon-btn" aria-label="Notifications">
-            <Bell size={18} />
-            <span className="notif-dot" />
-          </button>
           <button className="icon-btn" aria-label="Toggle theme" onClick={toggleTheme}>
             {darkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>

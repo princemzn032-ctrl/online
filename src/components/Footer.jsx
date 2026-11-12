@@ -1,6 +1,9 @@
-import { Globe, MessageCircle, Send, Sparkles } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../auth/useAuth';
 
 export default function Footer() {
+  const { user } = useAuth();
+
   return (
     <footer className="site-footer">
       <div className="container footer-grid">
@@ -9,39 +12,32 @@ export default function Footer() {
             <div className="brand-mark">Q</div>
             <span className="brand-name">QuizMaster</span>
           </div>
-          <p className="footer-copy">Learn. Practice. Compete. Improve.</p>
+          <p className="footer-copy">Engineering learning, built around your syllabus.</p>
         </div>
 
         <div>
           <h4>Quick Links</h4>
           <ul className="footer-links">
-            <li>Home</li>
-            <li>Quizzes</li>
-            <li>Categories</li>
-            <li>Leaderboard</li>
-            <li>About</li>
-            <li>Contact</li>
+            <li><Link to="/">Home</Link></li>
+            <li><Link to="/branches">Branches</Link></li>
+            <li><Link to="/quizzes">Practice</Link></li>
+            <li><Link to="/mock-tests">Mock Tests</Link></li>
+            <li><Link to="/leaderboard">Leaderboard</Link></li>
+            <li><Link to={user ? '/dashboard' : '/auth'}>Dashboard</Link></li>
           </ul>
         </div>
 
         <div>
           <h4>Support</h4>
           <ul className="footer-links">
-            <li>Help Center</li>
-            <li>FAQ</li>
-            <li>Privacy Policy</li>
-            <li>Terms & Conditions</li>
+            <li><Link to="/branches">Explore subjects</Link></li>
+            <li><Link to={user ? '/profile' : '/auth'}>{user ? 'Account settings' : 'Account help'}</Link></li>
           </ul>
         </div>
 
         <div>
           <h4>Social</h4>
-          <div className="social-row">
-            <button className="social-btn" aria-label="Website"><Globe size={16} /></button>
-            <button className="social-btn" aria-label="Community"><MessageCircle size={16} /></button>
-            <button className="social-btn" aria-label="Follow"><Send size={16} /></button>
-            <button className="social-btn" aria-label="Updates"><Sparkles size={16} /></button>
-          </div>
+          <p className="footer-copy">Learn. Practice. Perform.</p>
         </div>
       </div>
     </footer>

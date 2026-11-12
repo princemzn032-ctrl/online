@@ -14,9 +14,34 @@ import chatRoutes from './routes/chatRoutes.js';
 import resultRoutes from './routes/resultRoutes.js';
 import categoryRoutes from './routes/categoryRoutes.js';
 import platformRoutes from './routes/platformRoutes.js';
+import branchRoutes from './routes/branchRoutes.js';
+import semesterRoutes from './routes/semesterRoutes.js';
+import subjectRoutes from './routes/subjectRoutes.js';
+import topicRoutes from './routes/topicRoutes.js';
+import attemptRoutes from './routes/attemptRoutes.js';
+import dashboardRoutes from './routes/dashboardRoutes.js';
+import leaderboardRoutes from './routes/leaderboardRoutes.js';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 const app = express();
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+const createAuthLimiter = () => rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  handler: (_req, res) => res.status(429).json({
+    message: 'Too many attempts. Please wait 15 minutes before trying again.',
+  }),
+});
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -37,7 +62,13 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json());
+app.use(helmet());
+app.use('/api', apiLimiter);
+app.post('/api/auth/login', createAuthLimiter());
+app.post('/api/auth/register', createAuthLimiter());
+app.post('/api/auth/forgot-password', createAuthLimiter());
+app.post('/api/auth/reset-password', createAuthLimiter());
+app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
 app.get('/api/health', (_req, res) => {
@@ -56,6 +87,13 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/results', resultRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/platform', platformRoutes);
+app.use('/api/branches', branchRoutes);
+app.use('/api/semesters', semesterRoutes);
+app.use('/api/subjects', subjectRoutes);
+app.use('/api/topics', topicRoutes);
+app.use('/api/attempts', attemptRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/leaderboard', leaderboardRoutes);
 
 if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
   app.use(express.static(path.join(__dirname, '../dist')));

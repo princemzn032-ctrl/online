@@ -83,8 +83,11 @@ export async function fetchQuizzes() {
   });
 }
 
-export async function fetchLeaderboard() {
-  if (isLocalBackend) return getLeaderboard();
+export async function fetchLeaderboard(filters = {}) {
+  if (isLocalBackend) return getLeaderboard(filters);
+  if (filters.branchId || filters.period === 'weekly') {
+    throw new Error('Branch and weekly leaderboard filters require the local engineering backend.');
+  }
   const client = requireSupabase();
   const { data, error } = await client
     .from('leaderboard')
