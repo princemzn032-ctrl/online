@@ -66,6 +66,14 @@ import {
 } from './lib/quizData';
 
 const badgeColors = ['#fbbf24', '#f97316', '#8b5cf6', '#10b981', '#60a5fa'];
+const fallbackEngineeringBranches = [
+  { code: 'CSE', name: 'Computer Science & Engineering' },
+  { code: 'IT', name: 'Information Technology' },
+  { code: 'ECE', name: 'Electronics & Communication Engineering' },
+  { code: 'EE', name: 'Electrical Engineering' },
+  { code: 'ME', name: 'Mechanical Engineering' },
+  { code: 'CE', name: 'Civil Engineering' },
+];
 
 function formatScaleStat(value, minimum) {
   const count = Number(value);
@@ -74,7 +82,16 @@ function formatScaleStat(value, minimum) {
 
 function getAuthErrorMessage(error, fallback) {
   const message = error?.message || '';
+  if (error?.code === 'NETWORK_ERROR') {
+    return 'We could not connect to QuizMaster. Please check your connection and try again.';
+  }
+  if (error?.code === 'REQUEST_TIMEOUT') {
+    return 'The request took too long. Please try again.';
+  }
   if (/failed to fetch|networkerror|fetch failed|name_not_resolved/i.test(message)) {
+    if (isLocalBackend) {
+      return 'We could not connect to QuizMaster. Please check your connection and try again.';
+    }
     return 'Cannot connect to Supabase. Check that VITE_SUPABASE_URL points to an active project and that your internet connection is available.';
   }
   return message || fallback;
@@ -123,7 +140,7 @@ function App() {
     email: '',
     password: '',
     confirmPassword: '',
-    branchId: '',
+    branchCode: '',
     semester: '',
   });
   const registerPasswordsMismatch = Boolean(
@@ -164,6 +181,7 @@ function App() {
   const [attemptResult, setAttemptResult] = useState(null);
   const [markedForReview, setMarkedForReview] = useState([]);
   const [branchOptions, setBranchOptions] = useState([]);
+  const registrationBranchOptions = branchOptions.length ? branchOptions : fallbackEngineeringBranches;
   const [profileForm, setProfileForm] = useState({ name: '', branchId: '', semester: '' });
   const [profileSaveMessage, setProfileSaveMessage] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
@@ -213,7 +231,7 @@ function App() {
       .catch((error) => { if (mounted) setStatsError(error.message || 'Unable to load platform statistics.'); });
     getBranches()
       .then((items) => { if (mounted) setBranchOptions(items); })
-      .catch((error) => { if (mounted) setBranchLoadError(error.message || 'Unable to load engineering branches.'); });
+      .catch((error) => { if (mounted) setBranchLoadError(getAuthErrorMessage(error, 'Unable to load engineering branches.')); });
 
     return () => {
       mounted = false;
@@ -474,7 +492,7 @@ function App() {
       username: registerForm.name.trim(),
       email: registerForm.email.trim(),
       password: registerForm.password,
-      branchId: registerForm.branchId,
+      branchCode: registerForm.branchCode,
       semester: registerForm.semester ? Number(registerForm.semester) : undefined,
     };
     if (!details.username || !details.email || !details.password || !registerForm.confirmPassword) {
@@ -499,7 +517,7 @@ function App() {
       setAuthLoading(false);
       return;
     }
-    if (details.branchId && !details.semester) {
+    if (details.branchCode && !details.semester) {
       setAuthError('Choose a semester for your selected branch, or clear the branch selection.');
       setAuthLoading(false);
       return;
@@ -670,38 +688,8 @@ function App() {
               <span><CheckCircle2 size={15} /> Practice at your pace</span>
             </div>
           </div>
-
-          <div className="landing-preview-wrap" aria-label="Preview of a QuizMaster practice session">
-            <div className="landing-orbit landing-orbit-one" aria-hidden="true" />
-            <div className="landing-orbit landing-orbit-two" aria-hidden="true" />
-            <div className="landing-preview-card">
-              <div className="landing-preview-header">
-                <span className="landing-preview-brand"><span className="landing-preview-mark">Q</span> LEARNING WORKSPACE</span>
-                <span className="landing-live"><span /> READY</span>
-              </div>
-              <div className="landing-session">
-                <span className="landing-session-icon"><BookOpen size={20} /></span>
-                <div>
-                  <span className="landing-overline">PERSONALIZED PRACTICE</span>
-                  <h2>Signals &amp; Systems</h2>
-                  <p>ECE <span>·</span> Semester 4 <span>·</span> 12 questions</p>
-                </div>
-              </div>
-              <div className="landing-progress-label">
-                <span>Practice session</span>
-                <span>07 <i>/ 12</i></span>
-              </div>
-              <div className="landing-progress-track"><span /></div>
-              <div className="landing-question">
-                <span className="landing-overline">QUESTION 07</span>
-                <h3>Which transform is commonly used to analyze continuous-time systems?</h3>
-                <div className="landing-answer landing-answer-selected"><span>A</span> Laplace transform <CheckCircle2 size={16} /></div>
-                <div className="landing-answer"><span>B</span> Z-transform</div>
-              </div>
-              <div className="landing-insight"><Sparkles size={16} /><span>Review explanations and understand the idea behind each answer.</span></div>
-            </div>
-            <div className="landing-float-card landing-float-card-top"><span className="landing-float-icon"><Zap size={16} /></span><span><strong>Stay in flow</strong><small>Practice, review, repeat</small></span></div>
-            <div className="landing-float-card landing-float-card-bottom"><span className="landing-float-icon"><Target size={16} /></span><span><strong>Make progress</strong><small>One subject at a time</small></span></div>
+          <div className="landing-hero-art">
+            <img src="/quiz.jpg" alt="Glossy red 3D Quiz lettering" />
           </div>
         </div>
       </section>
@@ -903,24 +891,25 @@ function App() {
               <label htmlFor="register-branch">Engineering branch (optional)</label>
               <select
                 id="register-branch"
-                value={registerForm.branchId}
-                onChange={(event) => setRegisterForm({
-                  ...registerForm,
-                  branchId: event.target.value,
-                  semester: '',
-                })}
+                value={registerForm.branchCode}
+                onChange={(event) => {
+                  const branchCode = event.target.value;
+                  setRegisterForm((current) => ({ ...current, branchCode, semester: '' }));
+                }}
               >
                 <option value="">Choose later</option>
-                {branchOptions.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+                {registrationBranchOptions.map((branch) => (
+                  <option key={branch.code} value={branch.code}>{branch.name}</option>
+                ))}
               </select>
               <label htmlFor="register-semester">Semester</label>
               <select
                 id="register-semester"
                 value={registerForm.semester}
-                disabled={!registerForm.branchId}
-                onChange={(event) => setRegisterForm({ ...registerForm, semester: event.target.value })}
+                disabled={!registerForm.branchCode}
+                onChange={(event) => setRegisterForm((current) => ({ ...current, semester: event.target.value }))}
               >
-                <option value="">{registerForm.branchId ? 'Select semester' : 'Choose a branch first'}</option>
+                <option value="">{registerForm.branchCode ? 'Select semester' : 'Choose a branch first'}</option>
                 {Array.from({ length: 8 }, (_value, index) => index + 1).map((semester) => (
                   <option key={semester} value={semester}>Semester {semester}</option>
                 ))}

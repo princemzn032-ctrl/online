@@ -120,19 +120,32 @@ router.post('/register', async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   const branchId = req.body?.branchId || null;
+  const rawBranchCode = req.body?.branchCode;
+  const branchCode = typeof rawBranchCode === 'string' ? rawBranchCode.trim().toUpperCase() : '';
   const semester = req.body?.semester ?? null;
+  const hasBranch = Boolean(branchId || branchCode);
+  const invalidBranchCode = rawBranchCode != null
+    && rawBranchCode !== ''
+    && (typeof rawBranchCode !== 'string' || !/^[A-Z0-9]{2,6}$/.test(branchCode));
 
   if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 6) {
     return res.status(400).json({ message: 'Enter a valid name and email, and a password with at least 6 characters.' });
   }
-  if ((branchId && !/^[a-f\d]{24}$/i.test(branchId))
+  if ((branchId && (typeof branchId !== 'string' || !/^[a-f\d]{24}$/i.test(branchId)))
+    || invalidBranchCode
+    || (branchId && branchCode)
     || (semester !== null && (!Number.isInteger(semester) || semester < 1 || semester > 8))
-    || (branchId && semester === null)) {
+    || (hasBranch && semester === null)) {
     return res.status(400).json({ message: 'Choose a valid engineering branch and semester.' });
   }
 
   try {
-    if (branchId && !await Branch.exists({ _id: branchId, isActive: true })) {
+    let resolvedBranchId = branchId;
+    if (branchCode) {
+      const branch = await Branch.findOne({ code: branchCode, isActive: true }).select('_id');
+      if (!branch) return res.status(400).json({ message: 'The selected engineering branch is unavailable.' });
+      resolvedBranchId = branch._id;
+    } else if (branchId && !await Branch.exists({ _id: branchId, isActive: true })) {
       return res.status(400).json({ message: 'The selected engineering branch is unavailable.' });
     }
     const existingUser = await User.findOne({ email });
@@ -141,7 +154,14 @@ router.post('/register', async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await User.create({ name, email, password: hashedPassword, branchId, semester, lastLoginAt: new Date() });
+    const user = await User.create({
+      name,
+      email,
+      password: hashedPassword,
+      branchId: resolvedBranchId,
+      semester,
+      lastLoginAt: new Date(),
+    });
     const token = createToken(user);
     setSessionCookie(res, token);
 

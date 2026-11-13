@@ -159,9 +159,9 @@ export function AuthProvider({ children }) {
     return data;
   };
 
-  const signUp = async ({ username, email, password, branchId, semester }) => {
+  const signUp = async ({ username, email, password, branchCode, semester }) => {
     if (isLocalBackend) {
-      const data = await registerLocal({ name: username, email, password, branchId, semester });
+      const data = await registerLocal({ name: username, email, password, branchCode, semester });
       setSession(makeLocalSession(data.user));
       setProfile(makeLocalProfile(data.user));
       setProfileLoadedFor(String(data.user.id || data.user._id));
@@ -171,7 +171,7 @@ export function AuthProvider({ children }) {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { username } },
+      options: { data: { username, branchCode, semester: semester || null } },
     });
     if (error) throw error;
     return data;

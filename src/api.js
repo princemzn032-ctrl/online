@@ -16,7 +16,7 @@ const request = async (path, options = {}) => {
       },
     });
     if (response.headers.get('X-QuizMaster-Offline') === 'true') {
-      throw Object.assign(new Error('The QuizMaster backend is offline. Connect MongoDB and start the server to sign in.'), {
+      throw Object.assign(new Error('QuizMaster is temporarily unavailable. Please try again in a moment.'), {
         code: 'NETWORK_ERROR',
       });
     }
